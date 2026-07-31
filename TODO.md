@@ -29,6 +29,8 @@
 - [x] Applications tile opens a compact icon grid instead of a text menu.
 - [x] Drag app icons within the bar to reorder/pin them.
 - [x] Drag pinned app icons out of the bar to unpin them.
+- [x] Keep mbar visible in a larger interaction area while dragging/hovering.
+- [x] Live drag insertion feedback with shifting app icons.
 - [x] Start menu with Applications, Desktop, Trash, system actions, and quit.
 - [x] Window-title submenu for each app.
 - [x] Attention indicator for apps requesting attention.
