@@ -1092,6 +1092,7 @@ final class TaskbarController: NSObject {
 
     private func startIconDrag(bundleID: String) {
         guard bundleID != finderBundleID else { return }
+        hideWindowTitlePanel()
         isDraggingIcon = true
         draggedBundleID = bundleID
         liveDropIndex = nil
@@ -1110,7 +1111,7 @@ final class TaskbarController: NSObject {
         pins.insert(bundleID, at: min(insertionIndex, pins.count))
         acceptedDropBundleIDs.insert(bundleID)
         Settings.pinnedBundleIDs = pins
-        AppDelegate.shared?.rebuildBars(preserveVisibility: true)
+        AppDelegate.shared?.rebuildBarsInPlace()
         return true
     }
 
@@ -1201,9 +1202,9 @@ final class TaskbarController: NSObject {
         let wasAcceptedDrop = acceptedDropBundleIDs.remove(bundleID) != nil
         if !droppedInsideBar, !wasAcceptedDrop, Settings.pinnedBundleIDs.contains(bundleID) {
             Settings.pinnedBundleIDs.removeAll { $0 == bundleID }
-            AppDelegate.shared?.rebuildBars(preserveVisibility: true)
-        } else {
-            AppDelegate.shared?.rebuildBars(preserveVisibility: true)
+            AppDelegate.shared?.rebuildBarsInPlace()
+        } else if !wasAcceptedDrop {
+            AppDelegate.shared?.rebuildBarsInPlace()
         }
     }
 
@@ -1609,6 +1610,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 $0.show()
             }
         }
+    }
+
+    func rebuildBarsInPlace() {
+        controllers.forEach { $0.rebuild() }
     }
 
     @objc private func workspaceChanged(_ notification: Notification) {
