@@ -115,6 +115,29 @@ final class HoverView: NSView {
 }
 
 @MainActor
+final class DockBackgroundView: NSVisualEffectView {
+    var onDropBundleID: ((String, CGPoint) -> Bool)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        registerForDraggedTypes([appDragPasteboardType])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.string(forType: appDragPasteboardType) == nil ? [] : .move
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.string(forType: appDragPasteboardType) == nil ? [] : .move
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let bundleID = sender.draggingPasteboard.string(forType: appDragPasteboardType) else { return false }
+        return onDropBundleID?(bundleID, convert(sender.draggingLocation, from: nil)) ?? false
+    }
+}
+
+@MainActor
 final class ApplicationButton: NSButton {
     let url: URL
 
@@ -326,6 +349,8 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     private let displayTitle: String
     private let activeIndicator = CALayer()
     private let showsActiveIndicator: Bool
+    private var mouseDownEvent: NSEvent?
+    var onDragStarted: (() -> Void)?
     var onDragFinished: ((String, Bool) -> Void)?
 
     init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isHidden: Bool = false, attention: Bool = false, target: AnyObject?, action: Selector?) {
@@ -408,12 +433,40 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
         }
     }
 
-    override func mouseDragged(with event: NSEvent) {
-        guard let representedBundleID else {
-            super.mouseDragged(with: event)
+    override func mouseDown(with event: NSEvent) {
+        guard representedBundleID != nil else {
+            super.mouseDown(with: event)
             return
         }
 
+        mouseDownEvent = event
+        let start = convert(event.locationInWindow, from: nil)
+        while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            switch next.type {
+            case .leftMouseDragged:
+                let current = convert(next.locationInWindow, from: nil)
+                if hypot(current.x - start.x, current.y - start.y) > 3 {
+                    startDragging(with: next)
+                    mouseDownEvent = nil
+                    return
+                }
+            case .leftMouseUp:
+                mouseDownEvent = nil
+                performClick(nil)
+                return
+            default:
+                break
+            }
+        }
+        mouseDownEvent = nil
+    }
+
+    private func startDragging(with event: NSEvent) {
+        guard let representedBundleID else {
+            return
+        }
+
+        onDragStarted?()
         let pasteboardItem = NSPasteboardItem()
         pasteboardItem.setString(representedBundleID, forType: appDragPasteboardType)
         let item = NSDraggingItem(pasteboardWriter: pasteboardItem)
@@ -464,13 +517,14 @@ final class TaskbarController: NSObject {
     let stackView = NSStackView()
     private let hoverView = HoverView()
     private let triggerView = HoverView()
-    private let dockBackground = NSVisualEffectView()
+    private let dockBackground = DockBackgroundView()
     private let applicationGridPanel = ApplicationGridPanel()
     private var runningApps: [String: NSRunningApplication] = [:]
     private var appWindows: [pid_t: [WindowInfo]] = [:]
     private var activitySamples: [pid_t: ProcessSample] = [:]
     private var hideWorkItem: DispatchWorkItem?
     private var isRevealed = false
+    private var isDraggingIcon = false
 
     init(screen: NSScreen) {
         self.screen = screen
@@ -585,6 +639,10 @@ final class TaskbarController: NSObject {
         dockBackground.layer?.shadowOpacity = 0.28
         dockBackground.layer?.shadowRadius = 22
         dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 8)
+        dockBackground.onDropBundleID = { [weak self] bundleID, point in
+            guard let self else { return false }
+            return self.drop(bundleID: bundleID, at: self.hoverView.convert(point, from: self.dockBackground))
+        }
 
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         stackView.alignment = .centerY
@@ -644,9 +702,11 @@ final class TaskbarController: NSObject {
 
     private func scheduleHide() {
         hideWorkItem?.cancel()
+        guard !isDraggingIcon else { return }
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
+                guard !self.isDraggingIcon else { return }
                 let mouse = NSEvent.mouseLocation
                 if self.panel.frame.contains(mouse) || self.triggerPanel.frame.contains(mouse) {
                     self.scheduleHide()
@@ -701,6 +761,10 @@ final class TaskbarController: NSObject {
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
         let button = TaskbarItemView(title: title, image: icon, bundleID: bundleID, pid: nil, isActive: false, target: self, action: #selector(launchPinned(_:)))
         button.menu = pinnedMenu(bundleID: bundleID)
+        button.onDragStarted = { [weak self] in
+            self?.isDraggingIcon = true
+            self?.hideWorkItem?.cancel()
+        }
         button.onDragFinished = { [weak self] bundleID, droppedInsideBar in
             self?.dragFinished(bundleID: bundleID, droppedInsideBar: droppedInsideBar)
         }
@@ -714,6 +778,10 @@ final class TaskbarController: NSObject {
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
         let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isHidden: app.isHidden, attention: false, target: self, action: #selector(activateApp(_:)))
         button.menu = appMenu(app)
+        button.onDragStarted = { [weak self] in
+            self?.isDraggingIcon = true
+            self?.hideWorkItem?.cancel()
+        }
         button.onDragFinished = { [weak self] bundleID, droppedInsideBar in
             self?.dragFinished(bundleID: bundleID, droppedInsideBar: droppedInsideBar)
         }
@@ -747,9 +815,12 @@ final class TaskbarController: NSObject {
     }
 
     private func dragFinished(bundleID: String, droppedInsideBar: Bool) {
-        guard !droppedInsideBar, Settings.pinnedBundleIDs.contains(bundleID) else { return }
-        Settings.pinnedBundleIDs.removeAll { $0 == bundleID }
-        AppDelegate.shared?.rebuildBars()
+        isDraggingIcon = false
+        if !droppedInsideBar, Settings.pinnedBundleIDs.contains(bundleID) {
+            Settings.pinnedBundleIDs.removeAll { $0 == bundleID }
+            AppDelegate.shared?.rebuildBars()
+        }
+        scheduleHide()
     }
 
     private func addSeparator() {
