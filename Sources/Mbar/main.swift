@@ -342,35 +342,27 @@ final class TaskbarController: NSObject {
             view.removeFromSuperview()
         }
 
-        addStartButton()
-        addFlexibleSpacer()
-
         let pinnedIDs = Settings.pinnedBundleIDs
+        var renderedBundleIDs = Set<String>()
         for bundleID in pinnedIDs {
             addPinnedItem(bundleID: bundleID)
+            renderedBundleIDs.insert(bundleID)
         }
 
         for app in apps.sorted(by: appSort) {
-            guard shouldShow(app: app), app.bundleIdentifier.map({ !pinnedIDs.contains($0) }) ?? true else { continue }
+            guard shouldShow(app: app), app.bundleIdentifier.map({ !renderedBundleIDs.contains($0) }) ?? true else { continue }
             addAppItem(app)
+            if let bundleID = app.bundleIdentifier {
+                renderedBundleIDs.insert(bundleID)
+            }
         }
 
         addSeparator()
+        addStartButton()
         addTrashButton()
     }
 
     private func buildChrome() {
-        let effect = NSVisualEffectView()
-        effect.blendingMode = .behindWindow
-        effect.material = .underWindowBackground
-        effect.state = .active
-        effect.translatesAutoresizingMaskIntoConstraints = false
-        effect.wantsLayer = true
-        effect.layer?.cornerRadius = 14
-        effect.layer?.cornerCurve = .continuous
-        effect.layer?.borderWidth = 0.5
-        effect.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
-
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         stackView.alignment = .centerY
         stackView.distribution = .gravityAreas
@@ -381,19 +373,18 @@ final class TaskbarController: NSObject {
         hoverView.onEnter = { [weak self] in self?.reveal() }
         hoverView.onExit = { [weak self] in self?.scheduleHide() }
         hoverView.translatesAutoresizingMaskIntoConstraints = false
-        hoverView.addSubview(effect)
-        effect.addSubview(stackView)
+        hoverView.wantsLayer = true
+        hoverView.layer?.backgroundColor = NSColor.clear.cgColor
+        hoverView.addSubview(stackView)
         panel.contentView = hoverView
 
         NSLayoutConstraint.activate([
-            effect.leadingAnchor.constraint(equalTo: hoverView.leadingAnchor, constant: 8),
-            effect.trailingAnchor.constraint(equalTo: hoverView.trailingAnchor, constant: -8),
-            effect.topAnchor.constraint(equalTo: hoverView.topAnchor, constant: 5),
-            effect.bottomAnchor.constraint(equalTo: hoverView.bottomAnchor, constant: -5),
-            stackView.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-            stackView.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
-            stackView.topAnchor.constraint(equalTo: effect.topAnchor),
-            stackView.bottomAnchor.constraint(equalTo: effect.bottomAnchor)
+            stackView.centerXAnchor.constraint(equalTo: hoverView.centerXAnchor),
+            stackView.centerYAnchor.constraint(equalTo: hoverView.centerYAnchor),
+            stackView.leadingAnchor.constraint(greaterThanOrEqualTo: hoverView.leadingAnchor, constant: 10),
+            stackView.trailingAnchor.constraint(lessThanOrEqualTo: hoverView.trailingAnchor, constant: -10),
+            stackView.topAnchor.constraint(greaterThanOrEqualTo: hoverView.topAnchor, constant: 5),
+            stackView.bottomAnchor.constraint(lessThanOrEqualTo: hoverView.bottomAnchor, constant: -5)
         ])
     }
 
@@ -463,19 +454,6 @@ final class TaskbarController: NSObject {
         button.menu = startMenu()
         constrain(button)
         stackView.addArrangedSubview(button)
-    }
-
-    private func addFlexibleSpacer() {
-        let spacer = NSView()
-        spacer.translatesAutoresizingMaskIntoConstraints = false
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        spacer.setContentHuggingPriority(.defaultLow, for: .vertical)
-        if Settings.edge == .left || Settings.edge == .right {
-            spacer.heightAnchor.constraint(greaterThanOrEqualToConstant: 12).isActive = true
-        } else {
-            spacer.widthAnchor.constraint(greaterThanOrEqualToConstant: 12).isActive = true
-        }
-        stackView.addArrangedSubview(spacer)
     }
 
     private func addPinnedItem(bundleID: String) {

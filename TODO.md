@@ -15,6 +15,7 @@
 - [x] Size preferences: bar size, icon size, and row count.
 - [x] Hide by default and reveal from a screen-edge hover target.
 - [x] Compact icon-only tiles with translucent taskbar styling.
+- [x] Centered Dock-style icon ordering: pinned/running apps, open apps, separator, Applications, Trash.
 - [x] Start menu with Applications, Desktop, Trash, system actions, and quit.
 - [x] Window-title submenu for each app.
 - [x] Attention indicator for apps requesting attention.

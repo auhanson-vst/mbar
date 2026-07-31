@@ -47,4 +47,4 @@ launchctl kickstart -k "gui/$(id -u)/com.apple.Dock.agent"
 
 Window control is intentionally limited to public macOS APIs unless Accessibility permission is granted. The app can list public window titles from CoreGraphics and activate apps through `NSWorkspace`.
 
-The default UX is intentionally compact: mbar hides until the pointer touches the configured screen edge, then reveals icon-only taskbar tiles with tooltips and context menus.
+The default UX is intentionally compact: mbar hides until the pointer touches the configured screen edge, then reveals a centered icon-only strip ordered as pinned/running apps, additional open apps, a separator, Applications, and Trash.
