@@ -81,6 +81,11 @@ struct WindowInfo {
     let bounds: CGRect
 }
 
+struct WindowListItem {
+    let title: String
+    let open: () -> Void
+}
+
 struct ProcessSample {
     let cpu: String
     let memory: String
@@ -333,8 +338,56 @@ final class WindowTitleContentView: NSVisualEffectView {
 }
 
 @MainActor
+final class WindowTitleRowButton: NSButton {
+    override var isHighlighted: Bool {
+        didSet {
+            updateBackground(isHovering: isHighlighted)
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        bezelStyle = .regularSquare
+        setButtonType(.momentaryChange)
+        title = ""
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.cornerCurve = .continuous
+        updateBackground(isHovering: false)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        updateBackground(isHovering: true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        updateBackground(isHovering: false)
+    }
+
+    private func updateBackground(isHovering: Bool) {
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(isHovering ? 0.13 : 0.07).cgColor
+    }
+}
+
+@MainActor
 final class WindowTitlePanel: NSPanel {
     private let stackView = NSStackView()
+    private var items: [WindowListItem] = []
     var onEnter: (() -> Void)?
     var onExit: (() -> Void)?
 
@@ -380,16 +433,17 @@ final class WindowTitlePanel: NSPanel {
         ])
     }
 
-    func show(titles: [String], relativeTo view: NSView, edge: Edge) {
+    func show(items: [WindowListItem], relativeTo view: NSView, edge: Edge) {
         guard let window = view.window else { return }
         stackView.arrangedSubviews.forEach {
             stackView.removeArrangedSubview($0)
             $0.removeFromSuperview()
         }
 
-        let displayedTitles = titles.isEmpty ? ["No visible windows"] : Array(titles.prefix(8))
-        for title in displayedTitles {
-            stackView.addArrangedSubview(titleRow(title))
+        self.items = Array(items.prefix(8))
+        let displayedTitles = self.items.isEmpty ? ["No visible windows"] : self.items.map(\.title)
+        for (index, title) in displayedTitles.enumerated() {
+            stackView.addArrangedSubview(titleRow(title, index: index, isEnabled: !self.items.isEmpty))
         }
 
         let width = min(max(displayedTitles.map { CGFloat($0.count) * 7.0 }.max() ?? 160, 220), 420)
@@ -434,22 +488,29 @@ final class WindowTitlePanel: NSPanel {
         }
     }
 
-    private func titleRow(_ title: String) -> NSView {
-        let row = NSView()
+    @objc private func openWindowRow(_ sender: WindowTitleRowButton) {
+        guard items.indices.contains(sender.tag) else { return }
+        items[sender.tag].open()
+        hideAnimated()
+    }
+
+    private func titleRow(_ title: String, index: Int, isEnabled: Bool) -> NSView {
+        let row = WindowTitleRowButton(frame: .zero)
+        row.tag = index
+        row.target = self
+        row.action = #selector(openWindowRow(_:))
+        row.isEnabled = isEnabled
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.wantsLayer = true
-        row.layer?.cornerRadius = 8
-        row.layer?.cornerCurve = .continuous
-        row.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.07).cgColor
 
         let icon = NSImageView(image: NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil) ?? NSImage())
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
-        icon.contentTintColor = .secondaryLabelColor
+        icon.contentTintColor = isEnabled ? .secondaryLabelColor : .tertiaryLabelColor
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: 12, weight: .medium)
-        label.textColor = .labelColor
+        label.textColor = isEnabled ? .labelColor : .secondaryLabelColor
+        label.alignment = .left
         label.lineBreakMode = .byTruncatingMiddle
         label.maximumNumberOfLines = 1
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -513,6 +574,24 @@ final class AccessibilityWindowCatalog {
         guard isTrusted else { return [] }
         return windows(for: pid).compactMap { window in
             windowTitle(window)
+        }
+    }
+
+    static func windowItems(for pid: pid_t, appName: String, activateApp: @escaping () -> Void) -> [WindowListItem] {
+        guard isTrusted else { return [] }
+        let appWindows = windows(for: pid)
+        return appWindows.enumerated().map { index, window in
+            let title = windowTitle(window) ?? (appWindows.count == 1 ? appName : "\(appName) Window \(index + 1)")
+            return WindowListItem(title: title) {
+                activateApp()
+                var minimizedValue: CFTypeRef?
+                let isMinimized = AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success
+                    && (minimizedValue as? Bool == true)
+                if isMinimized {
+                    AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+                }
+                AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+            }
         }
     }
 
@@ -1160,7 +1239,7 @@ final class TaskbarController: NSObject {
         let item = DispatchWorkItem { [weak self, weak button, weak app] in
             Task { @MainActor in
                 guard let self, let button, let app, button.window != nil else { return }
-                self.windowTitlePanel.show(titles: self.windowTitles(for: app), relativeTo: button, edge: Settings.edge)
+                self.windowTitlePanel.show(items: self.windowListItems(for: app), relativeTo: button, edge: Settings.edge)
             }
         }
         hoverWindowWorkItem = item
@@ -1490,6 +1569,24 @@ final class TaskbarController: NSObject {
             return ["Grant mbar Accessibility permission for window titles"]
         }
         return Array(NSOrderedSet(array: cgTitles)) as? [String] ?? cgTitles
+    }
+
+    private func windowListItems(for app: NSRunningApplication) -> [WindowListItem] {
+        let appName = app.localizedName ?? "Window"
+        let axItems = AccessibilityWindowCatalog.windowItems(for: app.processIdentifier, appName: appName) { [weak self, weak app] in
+            guard let self, let app else { return }
+            self.activate(app)
+        }
+        if !axItems.isEmpty {
+            return axItems
+        }
+
+        return windowTitles(for: app).map { title in
+            WindowListItem(title: title) { [weak self, weak app] in
+                guard let self, let app else { return }
+                self.activate(app)
+            }
+        }
     }
 
     private func addMenuItem(to menu: NSMenu, title: String, action: Selector, representedObject: Any) {
