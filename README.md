@@ -73,6 +73,8 @@ Window control is intentionally limited to public macOS APIs unless Accessibilit
 
 The default UX hides until the pointer touches the configured screen edge, then quickly reveals a single translucent Dock-style section containing a centered icon-only strip ordered as pinned/running apps, additional open apps, a separator, native Applications folder icon, and native Trash icon. Every display shows the same deduplicated open-app set. The Applications tile opens a compact icon grid of installed apps.
 
+Right-click empty space on mbar to open a Dock-style context menu with settings, activity mode, position, system settings, and quit actions. The settings window exposes live controls for position, rows, bar size, icon size, activity mode, Accessibility status, and native Dock helpers.
+
 Drag app icons within the bar to reorder/pin them. While dragging, mbar stays open and shows a stable insertion marker for the drop position. Drag a pinned app icon out of the expanded interaction area to unpin it.
 
 After dropping, mbar preserves the revealed state instead of immediately hiding.

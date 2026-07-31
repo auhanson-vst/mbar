@@ -97,6 +97,7 @@ final class HoverView: NSView {
     var onExit: (() -> Void)?
     var onDropBundleID: ((String, CGPoint) -> Bool)?
     var onDragBundleID: ((String, CGPoint) -> Void)?
+    var onMenu: (() -> NSMenu)?
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -139,12 +140,17 @@ final class HoverView: NSView {
         guard let bundleID = sender.draggingPasteboard.string(forType: appDragPasteboardType) else { return false }
         return onDropBundleID?(bundleID, convert(sender.draggingLocation, from: nil)) ?? false
     }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        onMenu?()
+    }
 }
 
 @MainActor
 final class DockBackgroundView: NSVisualEffectView {
     var onDropBundleID: ((String, CGPoint) -> Bool)?
     var onDragBundleID: ((String, CGPoint) -> Void)?
+    var onMenu: (() -> NSMenu)?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -164,6 +170,10 @@ final class DockBackgroundView: NSVisualEffectView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let bundleID = sender.draggingPasteboard.string(forType: appDragPasteboardType) else { return false }
         return onDropBundleID?(bundleID, convert(sender.draggingLocation, from: nil)) ?? false
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        onMenu?()
     }
 }
 
@@ -731,6 +741,299 @@ final class ActivitySampler {
 }
 
 @MainActor
+final class SettingsWindowController: NSWindowController {
+    private let edgePopup = NSPopUpButton()
+    private let rowsStepper = NSStepper()
+    private let rowsValueLabel = NSTextField(labelWithString: "")
+    private let barSizeSlider = NSSlider(value: 0, minValue: 54, maxValue: 180, target: nil, action: nil)
+    private let barSizeValueLabel = NSTextField(labelWithString: "")
+    private let iconSizeSlider = NSSlider(value: 0, minValue: 24, maxValue: 96, target: nil, action: nil)
+    private let iconSizeValueLabel = NSTextField(labelWithString: "")
+    private let activityCheckbox = NSButton(checkboxWithTitle: "Show CPU and memory in app labels", target: nil, action: nil)
+    private let accessibilityStatusLabel = NSTextField(labelWithString: "")
+
+    init() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 610),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "mbar Settings"
+        window.isReleasedWhenClosed = false
+        window.center()
+        super.init(window: window)
+        buildContent()
+        refreshControls()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func showAndRefresh() {
+        refreshControls()
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func buildContent() {
+        guard let contentView = window?.contentView else { return }
+        let root = NSStackView()
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 18
+        root.edgeInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
+        root.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = NSTextField(labelWithString: "mbar Settings")
+        title.font = .systemFont(ofSize: 26, weight: .bold)
+        let subtitle = NSTextField(labelWithString: "Tune the taskbar without digging through scripts. Changes apply immediately.")
+        subtitle.font = .systemFont(ofSize: 13)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.maximumNumberOfLines = 2
+
+        root.addArrangedSubview(title)
+        root.addArrangedSubview(subtitle)
+        root.addArrangedSubview(layoutSection())
+        root.addArrangedSubview(behaviorSection())
+        root.addArrangedSubview(systemSection())
+
+        contentView.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            root.topAnchor.constraint(equalTo: contentView.topAnchor),
+            root.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor)
+        ])
+    }
+
+    private func layoutSection() -> NSView {
+        edgePopup.addItems(withTitles: Edge.allCases.map { $0.rawValue.capitalized })
+        edgePopup.target = self
+        edgePopup.action = #selector(edgeChanged(_:))
+
+        rowsStepper.minValue = 1
+        rowsStepper.maxValue = 5
+        rowsStepper.increment = 1
+        rowsStepper.target = self
+        rowsStepper.action = #selector(rowsChanged(_:))
+
+        barSizeSlider.target = self
+        barSizeSlider.action = #selector(barSizeChanged(_:))
+        iconSizeSlider.target = self
+        iconSizeSlider.action = #selector(iconSizeChanged(_:))
+
+        return section(
+            title: "Layout",
+            detail: "The same controls Dock and uBar users expect: screen edge, density, and icon scale.",
+            rows: [
+                row("Position", edgePopup),
+                row("Rows", pair(rowsStepper, rowsValueLabel)),
+                row("Bar size", pair(barSizeSlider, barSizeValueLabel)),
+                row("Icon size", pair(iconSizeSlider, iconSizeValueLabel))
+            ]
+        )
+    }
+
+    private func behaviorSection() -> NSView {
+        activityCheckbox.target = self
+        activityCheckbox.action = #selector(activityModeChanged(_:))
+        return section(
+            title: "Behavior",
+            detail: "mbar currently auto-hides by design and keeps all displays mirrored.",
+            rows: [
+                fullWidth(activityCheckbox),
+                infoRow("Auto-hide", "Always on"),
+                infoRow("Display mode", "All apps on every display")
+            ]
+        )
+    }
+
+    private func systemSection() -> NSView {
+        let accessibilityButton = NSButton(title: "Open Accessibility Settings", target: self, action: #selector(openAccessibilitySettings(_:)))
+        let dockSettingsButton = NSButton(title: "Open Desktop & Dock Settings", target: self, action: #selector(openDockSettings(_:)))
+        let hideDockButton = NSButton(title: "Hide Native Dock", target: self, action: #selector(hideNativeDock(_:)))
+        let resetButton = NSButton(title: "Reset Layout Defaults", target: self, action: #selector(resetLayoutDefaults(_:)))
+
+        return section(
+            title: "System",
+            detail: "Accessibility powers real window titles, window selection, and Dock badge labels.",
+            rows: [
+                row("Accessibility", accessibilityStatusLabel),
+                fullWidth(accessibilityButton),
+                fullWidth(dockSettingsButton),
+                fullWidth(hideDockButton),
+                fullWidth(resetButton)
+            ]
+        )
+    }
+
+    private func section(title: String, detail: String, rows: [NSView]) -> NSView {
+        let box = NSBox()
+        box.boxType = .custom
+        box.cornerRadius = 14
+        box.borderWidth = 0.75
+        box.borderColor = NSColor.separatorColor.withAlphaComponent(0.7)
+        box.fillColor = NSColor.controlBackgroundColor.withAlphaComponent(0.6)
+        box.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let heading = NSTextField(labelWithString: title)
+        heading.font = .systemFont(ofSize: 15, weight: .semibold)
+        let detailLabel = NSTextField(labelWithString: detail)
+        detailLabel.font = .systemFont(ofSize: 12)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.maximumNumberOfLines = 2
+
+        stack.addArrangedSubview(heading)
+        stack.addArrangedSubview(detailLabel)
+        for row in rows {
+            stack.addArrangedSubview(row)
+        }
+
+        box.contentView = NSView()
+        box.contentView?.addSubview(stack)
+        NSLayoutConstraint.activate([
+            box.widthAnchor.constraint(equalToConstant: 472),
+            stack.leadingAnchor.constraint(equalTo: box.contentView!.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: box.contentView!.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: box.contentView!.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: box.contentView!.bottomAnchor)
+        ])
+        return box
+    }
+
+    private func row(_ title: String, _ control: NSView) -> NSView {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.textColor = .labelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        control.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [label, control])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.distribution = .fill
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.widthAnchor.constraint(equalToConstant: 444),
+            label.widthAnchor.constraint(equalToConstant: 126)
+        ])
+        return stack
+    }
+
+    private func infoRow(_ title: String, _ value: String) -> NSView {
+        let valueLabel = NSTextField(labelWithString: value)
+        valueLabel.textColor = .secondaryLabelColor
+        return row(title, valueLabel)
+    }
+
+    private func fullWidth(_ view: NSView) -> NSView {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            view.widthAnchor.constraint(lessThanOrEqualToConstant: 444)
+        ])
+        return view
+    }
+
+    private func pair(_ first: NSView, _ second: NSView) -> NSView {
+        let stack = NSStackView(views: [first, second])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            first.widthAnchor.constraint(equalToConstant: first is NSSlider ? 205 : 70),
+            second.widthAnchor.constraint(equalToConstant: 52)
+        ])
+        return stack
+    }
+
+    private func refreshControls() {
+        edgePopup.selectItem(withTitle: Settings.edge.rawValue.capitalized)
+        rowsStepper.integerValue = Settings.rows
+        rowsValueLabel.stringValue = "\(Settings.rows)"
+        barSizeSlider.doubleValue = Double(Settings.barSize)
+        barSizeValueLabel.stringValue = "\(Int(Settings.barSize)) px"
+        iconSizeSlider.doubleValue = Double(Settings.iconSize)
+        iconSizeValueLabel.stringValue = "\(Int(Settings.iconSize)) px"
+        activityCheckbox.state = Settings.activityMode ? .on : .off
+        accessibilityStatusLabel.stringValue = AccessibilityWindowCatalog.isTrusted ? "Granted" : "Not granted"
+        accessibilityStatusLabel.textColor = AccessibilityWindowCatalog.isTrusted ? .systemGreen : .systemOrange
+    }
+
+    @objc private func edgeChanged(_ sender: NSPopUpButton) {
+        guard let title = sender.selectedItem?.title.lowercased(), let edge = Edge(rawValue: title) else { return }
+        Settings.edge = edge
+        AppDelegate.shared?.rebuildBars()
+    }
+
+    @objc private func rowsChanged(_ sender: NSStepper) {
+        Settings.rows = sender.integerValue
+        refreshControls()
+        AppDelegate.shared?.rebuildBars()
+    }
+
+    @objc private func barSizeChanged(_ sender: NSSlider) {
+        Settings.barSize = CGFloat(sender.doubleValue)
+        refreshControls()
+        AppDelegate.shared?.rebuildBars()
+    }
+
+    @objc private func iconSizeChanged(_ sender: NSSlider) {
+        Settings.iconSize = CGFloat(sender.doubleValue)
+        refreshControls()
+        AppDelegate.shared?.rebuildBarsInPlace()
+    }
+
+    @objc private func activityModeChanged(_ sender: NSButton) {
+        Settings.activityMode = sender.state == .on
+        refreshControls()
+        AppDelegate.shared?.rebuildBarsInPlace()
+    }
+
+    @objc private func openAccessibilitySettings(_ sender: NSButton) {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
+
+    @objc private func openDockSettings(_ sender: NSButton) {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Desktop-Settings.extension")!)
+    }
+
+    @objc private func hideNativeDock(_ sender: NSButton) {
+        run("/usr/bin/defaults", ["write", "com.apple.dock", "autohide", "-bool", "true"])
+        run("/usr/bin/defaults", ["write", "com.apple.dock", "autohide-delay", "-float", "1000"])
+        run("/usr/bin/defaults", ["write", "com.apple.dock", "autohide-time-modifier", "-float", "0"])
+        run("/bin/launchctl", ["kickstart", "-k", "gui/\(getuid())/com.apple.Dock.agent"])
+    }
+
+    @objc private func resetLayoutDefaults(_ sender: NSButton) {
+        Settings.edge = .bottom
+        Settings.rows = 1
+        Settings.barSize = 78
+        Settings.iconSize = 42
+        refreshControls()
+        AppDelegate.shared?.rebuildBars()
+    }
+
+    private func run(_ executable: String, _ arguments: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        try? process.run()
+    }
+}
+
+@MainActor
 final class TaskbarItemView: NSButton, NSDraggingSource {
     let representedBundleID: String?
     let representedPID: pid_t?
@@ -1115,6 +1418,9 @@ final class TaskbarController: NSObject {
             guard let self else { return }
             self.updateLiveDrop(bundleID: bundleID, at: self.hoverView.convert(point, from: self.dockBackground))
         }
+        dockBackground.onMenu = { [weak self] in
+            self?.barContextMenu() ?? NSMenu()
+        }
         windowTitlePanel.onEnter = { [weak self] in
             self?.windowTitleHideWorkItem?.cancel()
             self?.hideWorkItem?.cancel()
@@ -1139,6 +1445,9 @@ final class TaskbarController: NSObject {
         }
         hoverView.onDragBundleID = { [weak self] bundleID, point in
             self?.updateLiveDrop(bundleID: bundleID, at: point)
+        }
+        hoverView.onMenu = { [weak self] in
+            self?.barContextMenu() ?? NSMenu()
         }
         hoverView.translatesAutoresizingMaskIntoConstraints = false
         hoverView.wantsLayer = true
@@ -1738,6 +2047,59 @@ final class TaskbarController: NSObject {
         return menu
     }
 
+    private func barContextMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let settingsItem = NSMenuItem(title: "mbar Settings…", action: #selector(menuOpenSettings(_:)), keyEquivalent: ",")
+        settingsItem.target = self
+        settingsItem.isEnabled = true
+        menu.addItem(settingsItem)
+        menu.addItem(NSMenuItem.separator())
+
+        let hidingItem = NSMenuItem(title: "Auto-Hide Enabled", action: nil, keyEquivalent: "")
+        hidingItem.state = .on
+        hidingItem.isEnabled = false
+        menu.addItem(hidingItem)
+
+        let activityItem = NSMenuItem(title: Settings.activityMode ? "Disable Activity Mode" : "Enable Activity Mode", action: #selector(menuToggleActivity(_:)), keyEquivalent: "")
+        activityItem.target = self
+        activityItem.isEnabled = true
+        menu.addItem(activityItem)
+
+        let positionItem = NSMenuItem(title: "Position on Screen", action: nil, keyEquivalent: "")
+        let positionMenu = NSMenu()
+        positionMenu.autoenablesItems = false
+        for edge in Edge.allCases {
+            let item = NSMenuItem(title: edge.rawValue.capitalized, action: #selector(menuSetEdge(_:)), keyEquivalent: "")
+            item.representedObject = edge.rawValue
+            item.target = self
+            item.isEnabled = true
+            item.state = Settings.edge == edge ? .on : .off
+            positionMenu.addItem(item)
+        }
+        menu.setSubmenu(positionMenu, for: positionItem)
+        menu.addItem(positionItem)
+
+        menu.addItem(NSMenuItem.separator())
+        let dockSettingsItem = NSMenuItem(title: "Open Desktop & Dock Settings…", action: #selector(menuOpenDockSettings(_:)), keyEquivalent: "")
+        dockSettingsItem.target = self
+        dockSettingsItem.isEnabled = true
+        menu.addItem(dockSettingsItem)
+
+        let accessibilityItem = NSMenuItem(title: "Open Accessibility Settings…", action: #selector(menuOpenAccessibilitySettings(_:)), keyEquivalent: "")
+        accessibilityItem.target = self
+        accessibilityItem.isEnabled = true
+        menu.addItem(accessibilityItem)
+
+        menu.addItem(NSMenuItem.separator())
+        let quitItem = NSMenuItem(title: "Quit mbar", action: #selector(menuQuitApp(_:)), keyEquivalent: "q")
+        quitItem.target = self
+        quitItem.isEnabled = true
+        menu.addItem(quitItem)
+        return menu
+    }
+
     private func applicationURLs() -> [URL] {
         let roots = [
             URL(fileURLWithPath: "/Applications"),
@@ -1805,6 +2167,18 @@ final class TaskbarController: NSObject {
         NSWorkspace.shared.open(url)
     }
 
+    @objc private func menuOpenSettings(_ sender: NSMenuItem) {
+        AppDelegate.shared?.showSettings()
+    }
+
+    @objc private func menuOpenDockSettings(_ sender: NSMenuItem) {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Desktop-Settings.extension")!)
+    }
+
+    @objc private func menuOpenAccessibilitySettings(_ sender: NSMenuItem) {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
+
     @objc private func menuShowDesktop(_ sender: NSMenuItem) {
         NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop"))
     }
@@ -1869,6 +2243,7 @@ final class TaskbarController: NSObject {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate?
     private var controllers: [TaskbarController] = []
+    private let settingsWindowController = SettingsWindowController()
     private var timer: Timer?
     private var globalEventMonitor: Any?
     private var localEventMonitor: Any?
@@ -1912,6 +2287,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func rebuildBarsInPlace() {
         controllers.forEach { $0.rebuild() }
+    }
+
+    func showSettings() {
+        settingsWindowController.showAndRefresh()
     }
 
     @objc private func workspaceChanged(_ notification: Notification) {
