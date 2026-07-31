@@ -428,8 +428,32 @@ final class WindowCatalog {
 }
 
 final class AccessibilityWindowCatalog {
+    static func requestTrustIfNeeded() {
+        guard !AXIsProcessTrusted() else { return }
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        AXIsProcessTrustedWithOptions(options)
+    }
+
     static func windowTitles(for pid: pid_t) -> [String] {
         guard AXIsProcessTrusted() else { return [] }
+        return windows(for: pid).compactMap { window in
+            windowTitle(window)
+        }
+    }
+
+    static func unminimizeWindows(for pid: pid_t) {
+        guard AXIsProcessTrusted() else { return }
+        for window in windows(for: pid) {
+            var minimizedValue: CFTypeRef?
+            let isMinimized = AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success
+                && (minimizedValue as? Bool == true)
+            if isMinimized {
+                AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+            }
+        }
+    }
+
+    private static func windows(for pid: pid_t) -> [AXUIElement] {
         let app = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
@@ -437,17 +461,18 @@ final class AccessibilityWindowCatalog {
         else {
             return []
         }
+        return windows
+    }
 
-        return windows.compactMap { window in
-            var titleValue: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue) == .success,
-                  let title = titleValue as? String,
-                  !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else {
-                return nil
-            }
-            return title
+    private static func windowTitle(_ window: AXUIElement) -> String? {
+        var titleValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue) == .success,
+              let title = titleValue as? String,
+              !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
         }
+        return title
     }
 }
 
@@ -1241,13 +1266,13 @@ final class TaskbarController: NSObject {
 
     @objc private func activateApp(_ sender: TaskbarItemView) {
         guard let bundleID = sender.representedBundleID, let app = runningApps[bundleID] else { return }
-        app.activate(options: [.activateAllWindows])
+        activate(app)
     }
 
     @objc private func launchPinned(_ sender: TaskbarItemView) {
         guard let bundleID = sender.representedBundleID else { return }
         if let app = runningApps[bundleID] {
-            app.activate(options: [.activateAllWindows])
+            activate(app)
             return
         }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
@@ -1305,6 +1330,11 @@ final class TaskbarController: NSObject {
     }
 
     private func windowTitles(for app: NSRunningApplication) -> [String] {
+        let axTitles = AccessibilityWindowCatalog.windowTitles(for: app.processIdentifier)
+        if !axTitles.isEmpty {
+            return Array(NSOrderedSet(array: axTitles)) as? [String] ?? axTitles
+        }
+
         let appName = app.localizedName ?? "Window"
         let cgWindows = appWindows[app.processIdentifier] ?? []
         let cgTitles = cgWindows.enumerated().map { index, window in
@@ -1314,9 +1344,7 @@ final class TaskbarController: NSObject {
             }
             return trimmed
         }
-        let axTitles = AccessibilityWindowCatalog.windowTitles(for: app.processIdentifier)
-        let titles = cgTitles + axTitles
-        return Array(NSOrderedSet(array: titles)) as? [String] ?? titles
+        return Array(NSOrderedSet(array: cgTitles)) as? [String] ?? cgTitles
     }
 
     private func addMenuItem(to menu: NSMenu, title: String, action: Selector, representedObject: Any) {
@@ -1399,7 +1427,14 @@ final class TaskbarController: NSObject {
     }
 
     @objc private func menuActivate(_ sender: NSMenuItem) {
-        (sender.representedObject as? NSRunningApplication)?.activate(options: [.activateAllWindows])
+        guard let app = sender.representedObject as? NSRunningApplication else { return }
+        activate(app)
+    }
+
+    private func activate(_ app: NSRunningApplication) {
+        AccessibilityWindowCatalog.unminimizeWindows(for: app.processIdentifier)
+        app.unhide()
+        app.activate(options: [.activateAllWindows])
     }
 
     @objc private func menuHide(_ sender: NSMenuItem) {
@@ -1515,6 +1550,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
         NSApp.setActivationPolicy(.accessory)
+        AccessibilityWindowCatalog.requestTrustIfNeeded()
         rebuildBars()
 
         let center = NSWorkspace.shared.notificationCenter

@@ -39,6 +39,9 @@
 - [x] Render badges above icons using overlay views.
 - [x] Dock-like slide-in/slide-out animation from the configured screen edge.
 - [x] Window title fallback via Accessibility APIs.
+- [x] Prefer Accessibility window titles before CoreGraphics/fallback labels.
+- [x] Prompt for Accessibility permission on launch when needed.
+- [x] Unminimize app windows before activating an app from mbar.
 - [x] Delayed animated window-title popover on app icon hover.
 - [x] Generated fallback labels for untitled visible windows.
 - [x] Edge-aware placement so hover window list appears above bottom Dock icons.

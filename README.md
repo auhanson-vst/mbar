@@ -76,4 +76,6 @@ mbar also hides when you type or click outside the bar/application grid.
 
 Reveal and hide use a Dock-like slide animation from the configured screen edge.
 
-Window title menus use CoreGraphics titles, an Accessibility API fallback when permission is granted, and generated fallback labels for untitled visible windows. Hovering over an app icon for 0.75 seconds shows an animated window-title list above the icon.
+Window title menus prefer Accessibility API titles, then fall back to CoreGraphics titles and generated labels for untitled visible windows. macOS may require granting mbar Accessibility permission for titles that match real app/window titles. Hovering over an app icon for 0.75 seconds shows an animated window-title list above the icon.
+
+When Accessibility permission is granted, activating an app from mbar unminimizes its windows before bringing the app forward.
