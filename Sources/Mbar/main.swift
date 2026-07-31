@@ -73,6 +73,30 @@ struct ProcessSample {
     let memory: String
 }
 
+@MainActor
+final class HoverView: NSView {
+    var onEnter: (() -> Void)?
+    var onExit: (() -> Void)?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onEnter?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onExit?()
+    }
+}
+
 final class WindowCatalog {
     static func visibleWindows() -> [WindowInfo] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
@@ -137,20 +161,32 @@ final class TaskbarItemView: NSButton {
     let representedBundleID: String?
     let representedPID: pid_t?
 
-    init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, target: AnyObject?, action: Selector?) {
+    init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isHidden: Bool = false, attention: Bool = false, target: AnyObject?, action: Selector?) {
         self.representedBundleID = bundleID
         self.representedPID = pid
         super.init(frame: .zero)
-        self.title = title
+        self.title = ""
         self.image = image
-        self.imagePosition = .imageLeading
-        self.bezelStyle = .texturedRounded
-        self.isBordered = true
+        self.imagePosition = .imageOnly
+        self.bezelStyle = .regularSquare
+        self.isBordered = false
         self.target = target
         self.action = action
         self.setButtonType(.momentaryPushIn)
-        self.lineBreakMode = .byTruncatingTail
         self.toolTip = title
+        self.imageScaling = .scaleProportionallyUpOrDown
+        wantsLayer = true
+        layer?.cornerRadius = 9
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = isActive ? 1 : 0
+        layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.75).cgColor
+        layer?.backgroundColor = {
+            if attention { return NSColor.systemRed.withAlphaComponent(0.28).cgColor }
+            if isActive { return NSColor.controlAccentColor.withAlphaComponent(0.22).cgColor }
+            if isHidden { return NSColor.white.withAlphaComponent(0.05).cgColor }
+            return NSColor.white.withAlphaComponent(0.11).cgColor
+        }()
+        contentTintColor = isHidden ? .tertiaryLabelColor : nil
     }
 
     required init?(coder: NSCoder) {
@@ -183,16 +219,23 @@ final class TaskbarPanel: NSPanel {
 final class TaskbarController: NSObject {
     let screen: NSScreen
     let panel: TaskbarPanel
+    let triggerPanel: TaskbarPanel
     let stackView = NSStackView()
+    private let hoverView = HoverView()
+    private let triggerView = HoverView()
     private var runningApps: [String: NSRunningApplication] = [:]
     private var appWindows: [pid_t: [WindowInfo]] = [:]
     private var activitySamples: [pid_t: ProcessSample] = [:]
+    private var hideWorkItem: DispatchWorkItem?
+    private var isRevealed = false
 
     init(screen: NSScreen) {
         self.screen = screen
         self.panel = TaskbarPanel(frame: TaskbarController.frame(for: screen))
+        self.triggerPanel = TaskbarPanel(frame: TaskbarController.triggerFrame(for: screen))
         super.init()
         buildChrome()
+        buildTrigger()
     }
 
     static func frame(for screen: NSScreen) -> NSRect {
@@ -210,12 +253,30 @@ final class TaskbarController: NSObject {
         }
     }
 
+    static func triggerFrame(for screen: NSScreen) -> NSRect {
+        let visible = screen.visibleFrame
+        let thickness: CGFloat = 6
+        switch Settings.edge {
+        case .bottom:
+            return NSRect(x: visible.minX, y: visible.minY, width: visible.width, height: thickness)
+        case .top:
+            return NSRect(x: visible.minX, y: visible.maxY - thickness, width: visible.width, height: thickness)
+        case .left:
+            return NSRect(x: visible.minX, y: visible.minY, width: thickness, height: visible.height)
+        case .right:
+            return NSRect(x: visible.maxX - thickness, y: visible.minY, width: thickness, height: visible.height)
+        }
+    }
+
     func show() {
-        panel.orderFrontRegardless()
+        triggerPanel.orderFrontRegardless()
+        hide(animated: false)
     }
 
     func rebuild() {
         panel.setFrame(Self.frame(for: screen), display: true, animate: false)
+        triggerPanel.setFrame(Self.triggerFrame(for: screen), display: true, animate: false)
+        stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         let windows = WindowCatalog.visibleWindows()
         appWindows = Dictionary(grouping: windows, by: \.ownerPID)
         let apps = NSWorkspace.shared.runningApplications
@@ -255,20 +316,34 @@ final class TaskbarController: NSObject {
     private func buildChrome() {
         let effect = NSVisualEffectView()
         effect.blendingMode = .behindWindow
-        effect.material = .hudWindow
+        effect.material = .underWindowBackground
         effect.state = .active
         effect.translatesAutoresizingMaskIntoConstraints = false
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = 14
+        effect.layer?.cornerCurve = .continuous
+        effect.layer?.borderWidth = 0.5
+        effect.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
 
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         stackView.alignment = .centerY
-        stackView.spacing = 6
-        stackView.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+        stackView.distribution = .gravityAreas
+        stackView.spacing = 7
+        stackView.edgeInsets = NSEdgeInsets(top: 7, left: 10, bottom: 7, right: 10)
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
+        hoverView.onEnter = { [weak self] in self?.reveal() }
+        hoverView.onExit = { [weak self] in self?.scheduleHide() }
+        hoverView.translatesAutoresizingMaskIntoConstraints = false
+        hoverView.addSubview(effect)
         effect.addSubview(stackView)
-        panel.contentView = effect
+        panel.contentView = hoverView
 
         NSLayoutConstraint.activate([
+            effect.leadingAnchor.constraint(equalTo: hoverView.leadingAnchor, constant: 8),
+            effect.trailingAnchor.constraint(equalTo: hoverView.trailingAnchor, constant: -8),
+            effect.topAnchor.constraint(equalTo: hoverView.topAnchor, constant: 5),
+            effect.bottomAnchor.constraint(equalTo: hoverView.bottomAnchor, constant: -5),
             stackView.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
             stackView.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
             stackView.topAnchor.constraint(equalTo: effect.topAnchor),
@@ -276,8 +351,69 @@ final class TaskbarController: NSObject {
         ])
     }
 
+    private func buildTrigger() {
+        triggerView.onEnter = { [weak self] in self?.reveal() }
+        triggerView.onExit = { [weak self] in self?.scheduleHide() }
+        triggerView.wantsLayer = true
+        triggerView.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.08).cgColor
+        triggerPanel.contentView = triggerView
+        triggerPanel.hasShadow = false
+        triggerPanel.alphaValue = 0.45
+    }
+
+    private func reveal() {
+        hideWorkItem?.cancel()
+        guard !isRevealed else { return }
+        isRevealed = true
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
+    }
+
+    private func scheduleHide() {
+        hideWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                let mouse = NSEvent.mouseLocation
+                if self.panel.frame.contains(mouse) || self.triggerPanel.frame.contains(mouse) {
+                    self.scheduleHide()
+                } else {
+                    self.hide(animated: true)
+                }
+            }
+        }
+        hideWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: item)
+    }
+
+    private func hide(animated: Bool) {
+        hideWorkItem?.cancel()
+        isRevealed = false
+        guard panel.isVisible else { return }
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.13
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                panel.animator().alphaValue = 0
+            } completionHandler: {
+                Task { @MainActor in
+                    self.panel.orderOut(nil)
+                    self.panel.alphaValue = 1
+                }
+            }
+        } else {
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+        }
+    }
+
     private func addStartButton() {
-        let button = TaskbarItemView(title: "Apps", image: NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "Apps"), bundleID: nil, pid: nil, target: self, action: #selector(openStartMenu(_:)))
+        let button = TaskbarItemView(title: "Apps", image: NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "Apps"), bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openStartMenu(_:)))
         button.menu = startMenu()
         constrain(button)
         stackView.addArrangedSubview(button)
@@ -293,7 +429,7 @@ final class TaskbarController: NSObject {
         let title = url?.deletingPathExtension().lastPathComponent ?? bundleID
         let icon = url.map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSImage(systemSymbolName: "app", accessibilityDescription: title)
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
-        let button = TaskbarItemView(title: title, image: icon, bundleID: bundleID, pid: nil, target: self, action: #selector(launchPinned(_:)))
+        let button = TaskbarItemView(title: title, image: icon, bundleID: bundleID, pid: nil, isActive: false, target: self, action: #selector(launchPinned(_:)))
         button.menu = pinnedMenu(bundleID: bundleID)
         constrain(button)
         stackView.addArrangedSubview(button)
@@ -303,8 +439,8 @@ final class TaskbarController: NSObject {
         let title = titleFor(app)
         let icon = app.icon ?? NSImage(systemSymbolName: "app", accessibilityDescription: title)
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
-        let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, target: self, action: #selector(activateApp(_:)))
-        button.contentTintColor = app.isHidden ? .secondaryLabelColor : nil
+        let attention = app.isHidden == false && app.isActive == false && appWindows[app.processIdentifier]?.isEmpty == false
+        let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isHidden: app.isHidden, attention: attention, target: self, action: #selector(activateApp(_:)))
         button.menu = appMenu(app)
         constrain(button)
         stackView.addArrangedSubview(button)
@@ -339,12 +475,11 @@ final class TaskbarController: NSObject {
     }
 
     private func constrain(_ button: NSButton) {
-        button.imageScaling = .scaleProportionallyDown
         button.translatesAutoresizingMaskIntoConstraints = false
-        let longSide = Settings.edge == .left || Settings.edge == .right ? Settings.barSize - 12 : max(96, Settings.barSize * 2.4)
+        let tile = max(38, min(54, Settings.barSize - 14))
         NSLayoutConstraint.activate([
-            button.heightAnchor.constraint(greaterThanOrEqualToConstant: min(40, Settings.barSize - 8)),
-            button.widthAnchor.constraint(greaterThanOrEqualToConstant: longSide)
+            button.heightAnchor.constraint(equalToConstant: tile),
+            button.widthAnchor.constraint(equalToConstant: tile)
         ])
     }
 

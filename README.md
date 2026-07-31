@@ -9,6 +9,7 @@ Public listings and reviews describe uBar as having these capabilities:
 | Feature | mbar status |
 | --- | --- |
 | Taskbar or Dock-style layout | Implemented as a taskbar panel |
+| Auto-hide/reveal on edge hover | Implemented by default with a thin screen-edge trigger |
 | Running apps and open windows | Implemented: running apps plus window-title submenu |
 | Group windows by application or show separately | Implemented as grouped-by-app; separate-window mode is planned |
 | Pin/favorite apps, files, and folders | App pins implemented; files/folders planned |
@@ -45,3 +46,5 @@ launchctl kickstart -k "gui/$(id -u)/com.apple.Dock.agent"
 ## Notes
 
 Window control is intentionally limited to public macOS APIs unless Accessibility permission is granted. The app can list public window titles from CoreGraphics and activate apps through `NSWorkspace`.
+
+The default UX is intentionally compact: mbar hides until the pointer touches the configured screen edge, then reveals icon-only taskbar tiles with tooltips and context menus.
