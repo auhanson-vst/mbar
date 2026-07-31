@@ -596,6 +596,22 @@ final class TaskbarController: NSObject {
         }
     }
 
+    static func hiddenFrame(for screen: NSScreen) -> NSRect {
+        var frame = Self.frame(for: screen)
+        let revealSliver: CGFloat = 2
+        switch Settings.edge {
+        case .bottom:
+            frame.origin.y = screen.frame.minY - frame.height + revealSliver
+        case .top:
+            frame.origin.y = screen.frame.maxY - revealSliver
+        case .left:
+            frame.origin.x = screen.frame.minX - frame.width + revealSliver
+        case .right:
+            frame.origin.x = screen.frame.maxX - revealSliver
+        }
+        return frame
+    }
+
     static func triggerFrame(for screen: NSScreen) -> NSRect {
         let visible = screen.visibleFrame
         let thickness: CGFloat = 6
@@ -618,7 +634,7 @@ final class TaskbarController: NSObject {
 
     func rebuild() {
         let wasVisible = panel.isVisible
-        panel.setFrame(Self.frame(for: screen), display: true, animate: false)
+        panel.setFrame(wasVisible ? Self.frame(for: screen) : Self.hiddenFrame(for: screen), display: true, animate: false)
         triggerPanel.setFrame(Self.triggerFrame(for: screen), display: true, animate: false)
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         let windows = WindowCatalog.visibleWindows()
@@ -753,11 +769,13 @@ final class TaskbarController: NSObject {
         hideWorkItem?.cancel()
         guard !isRevealed else { return }
         isRevealed = true
-        panel.alphaValue = 0
+        panel.setFrame(Self.hiddenFrame(for: screen), display: false, animate: false)
+        panel.alphaValue = 0.98
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.08
+            context.duration = 0.16
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(Self.frame(for: screen), display: true)
             panel.animator().alphaValue = 1
         }
     }
@@ -794,18 +812,21 @@ final class TaskbarController: NSObject {
         guard panel.isVisible else { return }
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.07
+                context.duration = 0.12
                 context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-                panel.animator().alphaValue = 0
+                panel.animator().setFrame(Self.hiddenFrame(for: screen), display: true)
+                panel.animator().alphaValue = 0.98
             } completionHandler: {
                 Task { @MainActor in
                     self.panel.orderOut(nil)
                     self.panel.alphaValue = 1
+                    self.panel.setFrame(Self.hiddenFrame(for: self.screen), display: false, animate: false)
                 }
             }
         } else {
             panel.orderOut(nil)
             panel.alphaValue = 1
+            panel.setFrame(Self.hiddenFrame(for: screen), display: false, animate: false)
         }
     }
 

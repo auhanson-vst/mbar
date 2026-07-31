@@ -56,3 +56,5 @@ After dropping, mbar preserves the revealed state instead of immediately hiding.
 The normal hover keep-alive region is tight so the bar hides promptly. During drag, the keep-alive region expands substantially. App icons show a small red badge when mbar can detect multiple visible windows for that app through public window APIs.
 
 mbar also hides when you type or click outside the bar/application grid.
+
+Reveal and hide use a Dock-like slide animation from the configured screen edge.
