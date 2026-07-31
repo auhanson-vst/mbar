@@ -1437,6 +1437,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 }
 
 @MainActor
+final class TaskbarIconCell: NSButtonCell {
+    override func imageRect(forBounds rect: NSRect) -> NSRect {
+        let size = min(Settings.iconSize, rect.width, rect.height)
+        return NSRect(
+            x: rect.midX - size / 2,
+            y: rect.midY - size / 2,
+            width: size,
+            height: size
+        )
+    }
+}
+
+@MainActor
 final class TaskbarItemView: NSButton, NSDraggingSource {
     let representedBundleID: String?
     let representedPID: pid_t?
@@ -1459,6 +1472,7 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
         self.showsActiveIndicator = isActive
         self.badgeText = badgeText
         super.init(frame: .zero)
+        self.cell = TaskbarIconCell()
         self.title = ""
         self.image = image
         self.imagePosition = .imageOnly
@@ -1817,6 +1831,8 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         stackView.spacing = Settings.itemSpacing
         rebuild()
+        stackView.needsDisplay = true
+        stackView.arrangedSubviews.forEach { $0.needsDisplay = true }
         if !Settings.autoHide || (preserveVisibility && wasVisible) {
             reveal()
         }
