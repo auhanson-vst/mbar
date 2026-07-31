@@ -34,6 +34,23 @@ swift build
 .build/debug/mbar
 ```
 
+## Run at login with LaunchAgent
+
+Build and install a stable binary:
+
+```bash
+swift build -c release
+mkdir -p ~/.local/bin ~/Library/Logs/mbar
+install -m 755 .build/release/mbar ~/.local/bin/mbar
+```
+
+Install `~/Library/LaunchAgents/dev.auhanson.mbar.plist` pointing at `~/.local/bin/mbar`, then load it:
+
+```bash
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/dev.auhanson.mbar.plist
+launchctl kickstart -k "gui/$(id -u)/dev.auhanson.mbar"
+```
+
 For best results, hide the native Dock:
 
 ```bash
