@@ -242,9 +242,35 @@ final class ApplicationButton: NSButton {
 }
 
 @MainActor
+final class ApplicationGridContentView: NSVisualEffectView {
+    var onEnter: (() -> Void)?
+    var onExit: (() -> Void)?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onEnter?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onExit?()
+    }
+}
+
+@MainActor
 final class ApplicationGridPanel: NSPanel {
     private let grid = NSGridView()
     private var openURL: ((URL) -> Void)?
+    var onEnter: (() -> Void)?
+    var onExit: (() -> Void)?
 
     init() {
         super.init(
@@ -259,7 +285,7 @@ final class ApplicationGridPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = true
 
-        let effect = NSVisualEffectView()
+        let effect = ApplicationGridContentView()
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow
         effect.state = .active
@@ -269,6 +295,8 @@ final class ApplicationGridPanel: NSPanel {
         effect.layer?.borderWidth = 0.75
         effect.layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
         effect.translatesAutoresizingMaskIntoConstraints = false
+        effect.onEnter = { [weak self] in self?.onEnter?() }
+        effect.onExit = { [weak self] in self?.onExit?() }
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
@@ -1602,6 +1630,13 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             self?.scheduleWindowTitleHide()
             self?.scheduleHide()
         }
+        applicationGridPanel.onEnter = { [weak self] in
+            self?.hideWorkItem?.cancel()
+            self?.reveal()
+        }
+        applicationGridPanel.onExit = { [weak self] in
+            self?.scheduleHide()
+        }
 
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         stackView.alignment = .centerY
@@ -1675,7 +1710,10 @@ final class TaskbarController: NSObject, NSMenuDelegate {
                 guard let self else { return }
                 guard !self.isDraggingIcon, !self.isBarMenuOpen else { return }
                 let mouse = NSEvent.mouseLocation
-                if self.keepAliveFrame().contains(mouse) || self.triggerPanel.frame.contains(mouse) || self.windowTitleKeepAliveFrame().contains(mouse) {
+                if self.keepAliveFrame().contains(mouse)
+                    || self.triggerPanel.frame.contains(mouse)
+                    || self.applicationGridKeepAliveFrame().contains(mouse)
+                    || self.windowTitleKeepAliveFrame().contains(mouse) {
                     self.scheduleHide()
                 } else {
                     self.hide(animated: true)
@@ -1695,6 +1733,11 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private func windowTitleKeepAliveFrame() -> NSRect {
         guard windowTitlePanel.isVisible else { return .null }
         return windowTitlePanel.frame.insetBy(dx: -18, dy: -18).union(panel.frame.insetBy(dx: -24, dy: -32))
+    }
+
+    private func applicationGridKeepAliveFrame() -> NSRect {
+        guard applicationGridPanel.isVisible else { return .null }
+        return applicationGridPanel.frame.insetBy(dx: -18, dy: -18).union(panel.frame.insetBy(dx: -24, dy: -32))
     }
 
     private func hide(animated: Bool) {
@@ -1728,6 +1771,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         if let screenPoint,
            keepAliveFrame().contains(screenPoint)
             || applicationGridPanel.frame.contains(screenPoint)
+            || applicationGridKeepAliveFrame().contains(screenPoint)
             || windowTitleKeepAliveFrame().contains(screenPoint) {
             return
         }
