@@ -1241,7 +1241,7 @@ final class TaskbarController: NSObject {
     }
 
     private func addTrashButton() {
-        let image = NSWorkspace.shared.icon(forFile: URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".Trash").path)
+        let image = trashIconImage()
         image.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
         let button = TaskbarItemView(title: "Trash", image: image, bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openTrashButton(_:)))
         let menu = NSMenu()
@@ -1249,6 +1249,17 @@ final class TaskbarController: NSObject {
         button.menu = menu
         constrain(button)
         stackView.addArrangedSubview(button)
+    }
+
+    private func trashIconImage() -> NSImage {
+        let trashURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".Trash")
+        let isEmpty = (try? FileManager.default.contentsOfDirectory(at: trashURL, includingPropertiesForKeys: nil, options: []))?.isEmpty ?? true
+        let assetName = isEmpty ? "trashempty.png" : "trashfull.png"
+        let assetPath = "/System/Library/CoreServices/Dock.app/Contents/Resources/\(assetName)"
+        if let image = NSImage(contentsOfFile: assetPath) {
+            return image
+        }
+        return NSWorkspace.shared.icon(forFile: trashURL.path)
     }
 
     private func titleFor(_ app: NSRunningApplication) -> String {
