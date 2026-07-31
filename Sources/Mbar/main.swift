@@ -210,7 +210,7 @@ final class TaskbarItemView: NSButton {
 
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
-        animateTile(scale: 1.18, yOffset: 4, shadowOpacity: 0.22)
+        animateTile(scale: 1.04, yOffset: 1, shadowOpacity: 0.10)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -220,7 +220,7 @@ final class TaskbarItemView: NSButton {
 
     override var isHighlighted: Bool {
         didSet {
-            animateTile(scale: isHighlighted ? 0.94 : 1.0, yOffset: isHighlighted ? -1 : 0, shadowOpacity: isHighlighted ? 0.08 : 0)
+            animateTile(scale: isHighlighted ? 0.98 : 1.0, yOffset: 0, shadowOpacity: isHighlighted ? 0.06 : 0)
         }
     }
 
@@ -352,14 +352,22 @@ final class TaskbarController: NSObject {
 
         let pinnedIDs = Settings.pinnedBundleIDs
         var renderedBundleIDs = Set<String>()
+        var renderedPIDs = Set<pid_t>()
         for bundleID in pinnedIDs {
             addPinnedItem(bundleID: bundleID)
             renderedBundleIDs.insert(bundleID)
+            if let pid = runningApps[bundleID]?.processIdentifier {
+                renderedPIDs.insert(pid)
+            }
         }
 
         for app in apps.sorted(by: appSort) {
-            guard shouldShow(app: app), app.bundleIdentifier.map({ !renderedBundleIDs.contains($0) }) ?? true else { continue }
+            guard shouldShow(app: app), !renderedPIDs.contains(app.processIdentifier) else { continue }
+            if let bundleID = app.bundleIdentifier, renderedBundleIDs.contains(bundleID) {
+                continue
+            }
             addAppItem(app)
+            renderedPIDs.insert(app.processIdentifier)
             if let bundleID = app.bundleIdentifier {
                 renderedBundleIDs.insert(bundleID)
             }
@@ -477,7 +485,9 @@ final class TaskbarController: NSObject {
     }
 
     private func addStartButton() {
-        let button = TaskbarItemView(title: "Apps", image: NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "Apps"), bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openStartMenu(_:)))
+        let image = NSWorkspace.shared.icon(forFile: "/Applications")
+        image.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
+        let button = TaskbarItemView(title: "Applications", image: image, bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openStartMenu(_:)))
         button.menu = applicationsMenu()
         constrain(button)
         stackView.addArrangedSubview(button)
@@ -526,8 +536,8 @@ final class TaskbarController: NSObject {
     }
 
     private func addTrashButton() {
-        let image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Trash")
-        image?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
+        let image = NSWorkspace.shared.icon(forFile: URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".Trash").path)
+        image.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
         let button = TaskbarItemView(title: "Trash", image: image, bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openTrashButton(_:)))
         let menu = NSMenu()
         menu.addItem(withTitle: "Open Trash", action: #selector(menuOpenTrash(_:)), keyEquivalent: "")
