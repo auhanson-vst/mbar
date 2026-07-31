@@ -37,6 +37,7 @@
 - [x] Activity badge layer showing detectable multi-window app activity.
 - [x] Right-click bar background context menu with settings and Dock-style actions.
 - [x] Settings window for layout, behavior, Accessibility, and native Dock helpers.
+- [x] Left-sidebar settings navigation with built-in item visibility toggles.
 - [x] Hide on typing or clicking outside mbar.
 - [x] Position badges at the top of icon tiles.
 - [x] Render badges above icons using overlay views.

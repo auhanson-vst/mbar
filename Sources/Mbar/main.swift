@@ -20,6 +20,9 @@ struct Settings {
         static let rows = "rows"
         static let barSize = "barSize"
         static let iconSize = "iconSize"
+        static let showFinder = "showFinder"
+        static let showApplications = "showApplications"
+        static let showTrash = "showTrash"
         static let pinnedBundleIDs = "pinnedBundleIDs"
     }
 
@@ -59,17 +62,32 @@ struct Settings {
         set { UserDefaults.standard.set(Double(max(24, min(96, newValue))), forKey: Key.iconSize) }
     }
 
+    static var showFinder: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.showFinder) }
+        set { UserDefaults.standard.set(newValue, forKey: Key.showFinder) }
+    }
+
+    static var showApplications: Bool {
+        get { UserDefaults.standard.object(forKey: Key.showApplications) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Key.showApplications) }
+    }
+
+    static var showTrash: Bool {
+        get { UserDefaults.standard.object(forKey: Key.showTrash) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Key.showTrash) }
+    }
+
     static var pinnedBundleIDs: [String] {
         get {
             let saved = UserDefaults.standard.stringArray(forKey: Key.pinnedBundleIDs) ?? []
-            let filtered = saved.filter { $0 != finderBundleID }
+            let filtered = saved.filter { showFinder || $0 != finderBundleID }
             if filtered.count != saved.count {
                 UserDefaults.standard.set(Array(NSOrderedSet(array: filtered)) as? [String] ?? filtered, forKey: Key.pinnedBundleIDs)
             }
             return filtered
         }
         set {
-            let filtered = newValue.filter { $0 != finderBundleID }
+            let filtered = newValue.filter { showFinder || $0 != finderBundleID }
             UserDefaults.standard.set(Array(NSOrderedSet(array: filtered)) as? [String] ?? filtered, forKey: Key.pinnedBundleIDs)
         }
     }
@@ -742,6 +760,13 @@ final class ActivitySampler {
 
 @MainActor
 final class SettingsWindowController: NSWindowController {
+    private enum Pane: String, CaseIterable {
+        case layout = "Layout"
+        case items = "Items"
+        case behavior = "Behavior"
+        case system = "System"
+    }
+
     private let edgePopup = NSPopUpButton()
     private let rowsStepper = NSStepper()
     private let rowsValueLabel = NSTextField(labelWithString: "")
@@ -751,10 +776,16 @@ final class SettingsWindowController: NSWindowController {
     private let iconSizeValueLabel = NSTextField(labelWithString: "")
     private let activityCheckbox = NSButton(checkboxWithTitle: "Show CPU and memory in app labels", target: nil, action: nil)
     private let accessibilityStatusLabel = NSTextField(labelWithString: "")
+    private let showFinderCheckbox = NSButton(checkboxWithTitle: "Show Finder", target: nil, action: nil)
+    private let showApplicationsCheckbox = NSButton(checkboxWithTitle: "Show Applications launcher", target: nil, action: nil)
+    private let showTrashCheckbox = NSButton(checkboxWithTitle: "Show Trash", target: nil, action: nil)
+    private let contentStack = NSStackView()
+    private var paneButtons: [Pane: NSButton] = [:]
+    private var selectedPane: Pane = .layout
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 610),
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -781,36 +812,140 @@ final class SettingsWindowController: NSWindowController {
     private func buildContent() {
         guard let contentView = window?.contentView else { return }
         let root = NSStackView()
-        root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 18
-        root.edgeInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
+        root.orientation = .horizontal
+        root.alignment = .top
+        root.spacing = 0
         root.translatesAutoresizingMaskIntoConstraints = false
 
-        let title = NSTextField(labelWithString: "mbar Settings")
-        title.font = .systemFont(ofSize: 26, weight: .bold)
-        let subtitle = NSTextField(labelWithString: "Tune the taskbar without digging through scripts. Changes apply immediately.")
-        subtitle.font = .systemFont(ofSize: 13)
-        subtitle.textColor = .secondaryLabelColor
-        subtitle.maximumNumberOfLines = 2
+        let sidebar = sidebarView()
+        contentStack.orientation = .vertical
+        contentStack.alignment = .leading
+        contentStack.spacing = 18
+        contentStack.edgeInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
 
-        root.addArrangedSubview(title)
-        root.addArrangedSubview(subtitle)
-        root.addArrangedSubview(layoutSection())
-        root.addArrangedSubview(behaviorSection())
-        root.addArrangedSubview(systemSection())
+        root.addArrangedSubview(sidebar)
+        root.addArrangedSubview(contentStack)
 
         contentView.addSubview(root)
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             root.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             root.topAnchor.constraint(equalTo: contentView.topAnchor),
-            root.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor)
+            root.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            sidebar.widthAnchor.constraint(equalToConstant: 168)
         ])
+        selectPane(.layout)
+    }
+
+    private func sidebarView() -> NSView {
+        let sidebar = NSVisualEffectView()
+        sidebar.material = .sidebar
+        sidebar.blendingMode = .behindWindow
+        sidebar.state = .active
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 22, left: 14, bottom: 14, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = NSTextField(labelWithString: "mbar")
+        title.font = .systemFont(ofSize: 22, weight: .bold)
+        stack.addArrangedSubview(title)
+
+        let subtitle = NSTextField(labelWithString: "Settings")
+        subtitle.font = .systemFont(ofSize: 12, weight: .medium)
+        subtitle.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(subtitle)
+
+        for pane in Pane.allCases {
+            let button = sidebarButton(for: pane)
+            paneButtons[pane] = button
+            stack.addArrangedSubview(button)
+        }
+
+        sidebar.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: sidebar.topAnchor),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: sidebar.bottomAnchor)
+        ])
+        return sidebar
+    }
+
+    private func sidebarButton(for pane: Pane) -> NSButton {
+        let button = NSButton(title: pane.rawValue, target: self, action: #selector(sidebarPaneSelected(_:)))
+        button.bezelStyle = .regularSquare
+        button.isBordered = false
+        button.alignment = .left
+        button.font = .systemFont(ofSize: 13, weight: .medium)
+        button.tag = Pane.allCases.firstIndex(of: pane) ?? 0
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 140),
+            button.heightAnchor.constraint(equalToConstant: 30)
+        ])
+        return button
+    }
+
+    @objc private func sidebarPaneSelected(_ sender: NSButton) {
+        guard Pane.allCases.indices.contains(sender.tag) else { return }
+        selectPane(Pane.allCases[sender.tag])
+    }
+
+    private func selectPane(_ pane: Pane) {
+        selectedPane = pane
+        paneButtons.forEach { candidate, button in
+            button.contentTintColor = candidate == pane ? .controlAccentColor : .labelColor
+        }
+        refreshControls()
+        contentStack.arrangedSubviews.forEach {
+            contentStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+
+        let title = NSTextField(labelWithString: pane.rawValue)
+        title.font = .systemFont(ofSize: 26, weight: .bold)
+        let subtitle = NSTextField(labelWithString: paneSubtitle(pane))
+        subtitle.font = .systemFont(ofSize: 13)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.maximumNumberOfLines = 2
+        contentStack.addArrangedSubview(title)
+        contentStack.addArrangedSubview(subtitle)
+
+        switch pane {
+        case .layout:
+            contentStack.addArrangedSubview(layoutSection())
+        case .items:
+            contentStack.addArrangedSubview(itemsSection())
+        case .behavior:
+            contentStack.addArrangedSubview(behaviorSection())
+        case .system:
+            contentStack.addArrangedSubview(systemSection())
+        }
+    }
+
+    private func paneSubtitle(_ pane: Pane) -> String {
+        switch pane {
+        case .layout:
+            return "Position, density, and sizing controls for the bar."
+        case .items:
+            return "Choose which built-in items mbar shows alongside your apps."
+        case .behavior:
+            return "Interaction and information-display behavior."
+        case .system:
+            return "macOS permissions and helper actions."
+        }
     }
 
     private func layoutSection() -> NSView {
-        edgePopup.addItems(withTitles: Edge.allCases.map { $0.rawValue.capitalized })
+        if edgePopup.numberOfItems == 0 {
+            edgePopup.addItems(withTitles: Edge.allCases.map { $0.rawValue.capitalized })
+        }
         edgePopup.target = self
         edgePopup.action = #selector(edgeChanged(_:))
 
@@ -847,6 +982,25 @@ final class SettingsWindowController: NSWindowController {
                 fullWidth(activityCheckbox),
                 infoRow("Auto-hide", "Always on"),
                 infoRow("Display mode", "All apps on every display")
+            ]
+        )
+    }
+
+    private func itemsSection() -> NSView {
+        showFinderCheckbox.target = self
+        showFinderCheckbox.action = #selector(specialItemVisibilityChanged(_:))
+        showApplicationsCheckbox.target = self
+        showApplicationsCheckbox.action = #selector(specialItemVisibilityChanged(_:))
+        showTrashCheckbox.target = self
+        showTrashCheckbox.action = #selector(specialItemVisibilityChanged(_:))
+
+        return section(
+            title: "Built-in Items",
+            detail: "Finder stays hidden by default, but you can show it if you want a fuller Dock-style strip.",
+            rows: [
+                fullWidth(showFinderCheckbox),
+                fullWidth(showApplicationsCheckbox),
+                fullWidth(showTrashCheckbox)
             ]
         )
     }
@@ -902,7 +1056,7 @@ final class SettingsWindowController: NSWindowController {
         box.contentView = NSView()
         box.contentView?.addSubview(stack)
         NSLayoutConstraint.activate([
-            box.widthAnchor.constraint(equalToConstant: 472),
+            box.widthAnchor.constraint(equalToConstant: 496),
             stack.leadingAnchor.constraint(equalTo: box.contentView!.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: box.contentView!.trailingAnchor),
             stack.topAnchor.constraint(equalTo: box.contentView!.topAnchor),
@@ -925,7 +1079,7 @@ final class SettingsWindowController: NSWindowController {
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            stack.widthAnchor.constraint(equalToConstant: 444),
+            stack.widthAnchor.constraint(equalToConstant: 468),
             label.widthAnchor.constraint(equalToConstant: 126)
         ])
         return stack
@@ -967,6 +1121,9 @@ final class SettingsWindowController: NSWindowController {
         iconSizeSlider.doubleValue = Double(Settings.iconSize)
         iconSizeValueLabel.stringValue = "\(Int(Settings.iconSize)) px"
         activityCheckbox.state = Settings.activityMode ? .on : .off
+        showFinderCheckbox.state = Settings.showFinder ? .on : .off
+        showApplicationsCheckbox.state = Settings.showApplications ? .on : .off
+        showTrashCheckbox.state = Settings.showTrash ? .on : .off
         accessibilityStatusLabel.stringValue = AccessibilityWindowCatalog.isTrusted ? "Granted" : "Not granted"
         accessibilityStatusLabel.textColor = AccessibilityWindowCatalog.isTrusted ? .systemGreen : .systemOrange
     }
@@ -999,6 +1156,14 @@ final class SettingsWindowController: NSWindowController {
         Settings.activityMode = sender.state == .on
         refreshControls()
         AppDelegate.shared?.rebuildBarsInPlace()
+    }
+
+    @objc private func specialItemVisibilityChanged(_ sender: NSButton) {
+        Settings.showFinder = showFinderCheckbox.state == .on
+        Settings.showApplications = showApplicationsCheckbox.state == .on
+        Settings.showTrash = showTrashCheckbox.state == .on
+        refreshControls()
+        AppDelegate.shared?.rebuildBars()
     }
 
     @objc private func openAccessibilitySettings(_ sender: NSButton) {
@@ -1340,7 +1505,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             .filter { app in
                 app.activationPolicy == .regular
                     && app.bundleIdentifier != Bundle.main.bundleIdentifier
-                    && app.bundleIdentifier != finderBundleID
+                    && (Settings.showFinder || app.bundleIdentifier != finderBundleID)
             }
 
         runningApps = Dictionary(uniqueKeysWithValues: apps.compactMap { app in
@@ -1360,7 +1525,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             view.removeFromSuperview()
         }
 
-        let pinnedIDs = Settings.pinnedBundleIDs.filter { $0 != finderBundleID }
+        let pinnedIDs = Settings.pinnedBundleIDs.filter { Settings.showFinder || $0 != finderBundleID }
         var renderedBundleIDs = Set<String>()
         var renderedPIDs = Set<pid_t>()
         var rebuiltAppOrder: [String] = []
@@ -1387,9 +1552,15 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         }
         currentAppOrder = rebuiltAppOrder
 
-        addSeparator()
-        addStartButton()
-        addTrashButton()
+        if Settings.showApplications || Settings.showTrash {
+            addSeparator()
+        }
+        if Settings.showApplications {
+            addStartButton()
+        }
+        if Settings.showTrash {
+            addTrashButton()
+        }
         if wasVisible || isDraggingIcon {
             panel.orderFrontRegardless()
             panel.alphaValue = 1
@@ -1572,7 +1743,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func addPinnedItem(bundleID: String) {
-        guard bundleID != finderBundleID else { return }
+        guard Settings.showFinder || bundleID != finderBundleID else { return }
         if let app = runningApps[bundleID] {
             addAppItem(app)
             return
@@ -1663,7 +1834,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func startIconDrag(bundleID: String) {
-        guard bundleID != finderBundleID else { return }
+        guard Settings.showFinder || bundleID != finderBundleID else { return }
         hideWindowTitlePanel()
         isDraggingIcon = true
         draggedBundleID = bundleID
@@ -1673,12 +1844,12 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func drop(bundleID: String, at point: CGPoint) -> Bool {
-        guard bundleID != finderBundleID else { return false }
+        guard Settings.showFinder || bundleID != finderBundleID else { return false }
         guard runningApps[bundleID] != nil || NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil else {
             return false
         }
 
-        var pins = currentAppOrder.filter { $0 != bundleID && $0 != finderBundleID }
+        var pins = currentAppOrder.filter { $0 != bundleID && (Settings.showFinder || $0 != finderBundleID) }
         let insertionIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
         pins.insert(bundleID, at: min(insertionIndex, pins.count))
         acceptedDropBundleIDs.insert(bundleID)
@@ -1688,7 +1859,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func updateLiveDrop(bundleID: String, at point: CGPoint) {
-        guard isDraggingIcon, bundleID != finderBundleID else { return }
+        guard isDraggingIcon, Settings.showFinder || bundleID != finderBundleID else { return }
         let newIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
         guard liveDropIndex != newIndex else { return }
         liveDropIndex = newIndex
@@ -1746,7 +1917,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             }
             appIndex += 1
         }
-        return max(0, stackView.arrangedSubviews.count - 3)
+        return stackView.arrangedSubviews.count
     }
 
     private func appInsertionIndex(forDrop point: CGPoint, excluding bundleID: String) -> Int {
