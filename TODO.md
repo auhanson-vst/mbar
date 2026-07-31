@@ -24,7 +24,8 @@
 - [x] Subtle hover effect without exaggerated icon scaling.
 - [x] Native Applications and Trash icons.
 - [x] Defensive app icon deduplication.
-- [x] Dock-style hover labels.
+- [x] Removed heavy hover label panel in favor of native tooltips.
+- [x] Faster reveal/hide and hover animation timing.
 - [x] Applications tile opens a compact icon grid instead of a text menu.
 - [x] Start menu with Applications, Desktop, Trash, system actions, and quit.
 - [x] Window-title submenu for each app.

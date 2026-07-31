@@ -98,73 +98,6 @@ final class HoverView: NSView {
 }
 
 @MainActor
-final class HoverLabel {
-    static let shared = HoverLabel()
-
-    private let panel: NSPanel
-    private let label: NSTextField
-
-    private init() {
-        panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 120, height: 34),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-
-        let effect = NSVisualEffectView()
-        effect.material = .hudWindow
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        effect.wantsLayer = true
-        effect.layer?.cornerRadius = 9
-        effect.layer?.cornerCurve = .continuous
-
-        label = NSTextField(labelWithString: "")
-        label.font = .systemFont(ofSize: 13, weight: .medium)
-        label.textColor = .labelColor
-        label.alignment = .center
-        label.lineBreakMode = .byTruncatingTail
-        label.translatesAutoresizingMaskIntoConstraints = false
-
-        effect.addSubview(label)
-        panel.contentView = effect
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 12),
-            label.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -12),
-            label.centerYAnchor.constraint(equalTo: effect.centerYAnchor)
-        ])
-    }
-
-    func show(title: String, relativeTo view: NSView) {
-        guard let window = view.window, !title.isEmpty else { return }
-        label.stringValue = title
-        let width = min(max(84, ceil(label.intrinsicContentSize.width) + 28), 240)
-        panel.setContentSize(NSSize(width: width, height: 34))
-
-        let localPoint = NSPoint(x: view.bounds.midX, y: view.bounds.maxY + 10)
-        let screenPoint = window.convertPoint(toScreen: view.convert(localPoint, to: nil))
-        panel.setFrameOrigin(NSPoint(x: screenPoint.x - width / 2, y: screenPoint.y))
-        panel.alphaValue = 0
-        panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.08
-            panel.animator().alphaValue = 1
-        }
-    }
-
-    func hide() {
-        guard panel.isVisible else { return }
-        panel.orderOut(nil)
-    }
-}
-
-@MainActor
 final class ApplicationButton: NSButton {
     let url: URL
 
@@ -426,13 +359,11 @@ final class TaskbarItemView: NSButton {
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
         animateTile(scale: 1.04, yOffset: 1, shadowOpacity: 0.10)
-        HoverLabel.shared.show(title: displayTitle, relativeTo: self)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         animateTile(scale: 1.0, yOffset: 0, shadowOpacity: 0)
-        HoverLabel.shared.hide()
     }
 
     override var isHighlighted: Bool {
@@ -450,7 +381,7 @@ final class TaskbarItemView: NSButton {
 
     private func animateTile(scale: CGFloat, yOffset: CGFloat, shadowOpacity: Float) {
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
+            context.duration = 0.06
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             var transform = CATransform3DMakeTranslation(0, yOffset, 0)
             transform = CATransform3DScale(transform, scale, scale, 1)
@@ -658,7 +589,7 @@ final class TaskbarController: NSObject {
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.16
+            context.duration = 0.08
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
         }
@@ -678,18 +609,17 @@ final class TaskbarController: NSObject {
             }
         }
         hideWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: item)
     }
 
     private func hide(animated: Bool) {
         hideWorkItem?.cancel()
         isRevealed = false
-        HoverLabel.shared.hide()
         applicationGridPanel.orderOut(nil)
         guard panel.isVisible else { return }
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.13
+                context.duration = 0.07
                 context.timingFunction = CAMediaTimingFunction(name: .easeIn)
                 panel.animator().alphaValue = 0
             } completionHandler: {
