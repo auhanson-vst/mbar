@@ -97,6 +97,219 @@ final class HoverView: NSView {
     }
 }
 
+@MainActor
+final class HoverLabel {
+    static let shared = HoverLabel()
+
+    private let panel: NSPanel
+    private let label: NSTextField
+
+    private init() {
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 120, height: 34),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+
+        let effect = NSVisualEffectView()
+        effect.material = .hudWindow
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = 9
+        effect.layer?.cornerCurve = .continuous
+
+        label = NSTextField(labelWithString: "")
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.textColor = .labelColor
+        label.alignment = .center
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        effect.addSubview(label)
+        panel.contentView = effect
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -12),
+            label.centerYAnchor.constraint(equalTo: effect.centerYAnchor)
+        ])
+    }
+
+    func show(title: String, relativeTo view: NSView) {
+        guard let window = view.window, !title.isEmpty else { return }
+        label.stringValue = title
+        let width = min(max(84, ceil(label.intrinsicContentSize.width) + 28), 240)
+        panel.setContentSize(NSSize(width: width, height: 34))
+
+        let localPoint = NSPoint(x: view.bounds.midX, y: view.bounds.maxY + 10)
+        let screenPoint = window.convertPoint(toScreen: view.convert(localPoint, to: nil))
+        panel.setFrameOrigin(NSPoint(x: screenPoint.x - width / 2, y: screenPoint.y))
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.08
+            panel.animator().alphaValue = 1
+        }
+    }
+
+    func hide() {
+        guard panel.isVisible else { return }
+        panel.orderOut(nil)
+    }
+}
+
+@MainActor
+final class ApplicationButton: NSButton {
+    let url: URL
+
+    init(url: URL, target: AnyObject?, action: Selector?) {
+        self.url = url
+        super.init(frame: .zero)
+        let title = url.deletingPathExtension().lastPathComponent
+        self.title = title
+        self.image = NSWorkspace.shared.icon(forFile: url.path)
+        self.image?.size = NSSize(width: 44, height: 44)
+        self.imagePosition = .imageAbove
+        self.alignment = .center
+        self.font = .systemFont(ofSize: 11, weight: .regular)
+        self.lineBreakMode = .byTruncatingTail
+        self.bezelStyle = .regularSquare
+        self.isBordered = false
+        self.target = target
+        self.action = action
+        self.toolTip = title
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.cornerCurve = .continuous
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.08).cgColor
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+}
+
+@MainActor
+final class ApplicationGridPanel: NSPanel {
+    private let grid = NSGridView()
+    private var openURL: ((URL) -> Void)?
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 360),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        level = .statusBar
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+
+        let effect = NSVisualEffectView()
+        effect.material = .hudWindow
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = 18
+        effect.layer?.cornerCurve = .continuous
+        effect.layer?.borderWidth = 0.75
+        effect.layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
+        effect.translatesAutoresizingMaskIntoConstraints = false
+
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+
+        grid.rowSpacing = 8
+        grid.columnSpacing = 8
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = grid
+
+        effect.addSubview(scroll)
+        contentView = effect
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 12),
+            scroll.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -12),
+            scroll.topAnchor.constraint(equalTo: effect.topAnchor, constant: 12),
+            scroll.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -12),
+            grid.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
+        ])
+    }
+
+    func show(apps: [URL], relativeTo view: NSView, openURL: @escaping (URL) -> Void) {
+        self.openURL = openURL
+        grid.subviews.forEach { $0.removeFromSuperview() }
+
+        let columns = 6
+        var rows: [[NSView]] = []
+        for chunkStart in stride(from: 0, to: min(apps.count, 120), by: columns) {
+            let chunk = apps[chunkStart..<min(chunkStart + columns, apps.count)]
+            rows.append(chunk.map { url in
+                let button = ApplicationButton(url: url, target: self, action: #selector(openApp(_:)))
+                button.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    button.widthAnchor.constraint(equalToConstant: 74),
+                    button.heightAnchor.constraint(equalToConstant: 78)
+                ])
+                return button
+            })
+        }
+        if rows.isEmpty {
+            rows = [[NSTextField(labelWithString: "No applications found")]]
+        }
+
+        let newGrid = NSGridView(views: rows)
+        newGrid.rowSpacing = 8
+        newGrid.columnSpacing = 8
+        newGrid.translatesAutoresizingMaskIntoConstraints = false
+        grid.addSubview(newGrid)
+        NSLayoutConstraint.activate([
+            newGrid.leadingAnchor.constraint(equalTo: grid.leadingAnchor),
+            newGrid.trailingAnchor.constraint(equalTo: grid.trailingAnchor),
+            newGrid.topAnchor.constraint(equalTo: grid.topAnchor),
+            newGrid.bottomAnchor.constraint(equalTo: grid.bottomAnchor)
+        ])
+
+        guard let window = view.window else { return }
+        let size = NSSize(width: 520, height: 360)
+        setContentSize(size)
+        let localPoint = NSPoint(x: view.bounds.midX, y: view.bounds.maxY + 12)
+        let screenPoint = window.convertPoint(toScreen: view.convert(localPoint, to: nil))
+        setFrameOrigin(NSPoint(x: screenPoint.x - size.width / 2, y: screenPoint.y))
+        orderFrontRegardless()
+    }
+
+    @objc private func openApp(_ sender: ApplicationButton) {
+        openURL?(sender.url)
+        orderOut(nil)
+    }
+}
+
 final class WindowCatalog {
     static func visibleWindows() -> [WindowInfo] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
@@ -160,12 +373,14 @@ final class ActivitySampler {
 final class TaskbarItemView: NSButton {
     let representedBundleID: String?
     let representedPID: pid_t?
+    private let displayTitle: String
     private let activeIndicator = CALayer()
     private let showsActiveIndicator: Bool
 
     init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isHidden: Bool = false, attention: Bool = false, target: AnyObject?, action: Selector?) {
         self.representedBundleID = bundleID
         self.representedPID = pid
+        self.displayTitle = title
         self.showsActiveIndicator = isActive || pid != nil
         super.init(frame: .zero)
         self.title = ""
@@ -211,11 +426,13 @@ final class TaskbarItemView: NSButton {
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
         animateTile(scale: 1.04, yOffset: 1, shadowOpacity: 0.10)
+        HoverLabel.shared.show(title: displayTitle, relativeTo: self)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         animateTile(scale: 1.0, yOffset: 0, shadowOpacity: 0)
+        HoverLabel.shared.hide()
     }
 
     override var isHighlighted: Bool {
@@ -273,6 +490,7 @@ final class TaskbarController: NSObject {
     private let hoverView = HoverView()
     private let triggerView = HoverView()
     private let dockBackground = NSVisualEffectView()
+    private let applicationGridPanel = ApplicationGridPanel()
     private var runningApps: [String: NSRunningApplication] = [:]
     private var appWindows: [pid_t: [WindowInfo]] = [:]
     private var activitySamples: [pid_t: ProcessSample] = [:]
@@ -466,6 +684,8 @@ final class TaskbarController: NSObject {
     private func hide(animated: Bool) {
         hideWorkItem?.cancel()
         isRevealed = false
+        HoverLabel.shared.hide()
+        applicationGridPanel.orderOut(nil)
         guard panel.isVisible else { return }
         if animated {
             NSAnimationContext.runAnimationGroup { context in
@@ -488,7 +708,6 @@ final class TaskbarController: NSObject {
         let image = NSWorkspace.shared.icon(forFile: "/Applications")
         image.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
         let button = TaskbarItemView(title: "Applications", image: image, bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openStartMenu(_:)))
-        button.menu = applicationsMenu()
         constrain(button)
         stackView.addArrangedSubview(button)
     }
@@ -595,7 +814,9 @@ final class TaskbarController: NSObject {
     }
 
     @objc private func openStartMenu(_ sender: NSButton) {
-        sender.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
+        applicationGridPanel.show(apps: applicationURLs(), relativeTo: sender) { url in
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc private func openTrashButton(_ sender: NSButton) {
