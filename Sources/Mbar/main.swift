@@ -588,6 +588,7 @@ final class TaskbarController: NSObject {
     }
 
     func rebuild() {
+        let wasVisible = panel.isVisible
         panel.setFrame(Self.frame(for: screen), display: true, animate: false)
         triggerPanel.setFrame(Self.triggerFrame(for: screen), display: true, animate: false)
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
@@ -643,6 +644,11 @@ final class TaskbarController: NSObject {
         addSeparator()
         addStartButton()
         addTrashButton()
+        if wasVisible || isDraggingIcon {
+            panel.orderFrontRegardless()
+            panel.alphaValue = 1
+            isRevealed = true
+        }
     }
 
     private func buildChrome() {
@@ -714,7 +720,7 @@ final class TaskbarController: NSObject {
         triggerPanel.alphaValue = 0.01
     }
 
-    private func reveal() {
+    func reveal() {
         hideWorkItem?.cancel()
         guard !isRevealed else { return }
         isRevealed = true
@@ -839,7 +845,7 @@ final class TaskbarController: NSObject {
         let insertionIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
         pins.insert(bundleID, at: min(insertionIndex, pins.count))
         Settings.pinnedBundleIDs = pins
-        AppDelegate.shared?.rebuildBars()
+        AppDelegate.shared?.rebuildBars(preserveVisibility: true)
         return true
     }
 
@@ -923,11 +929,10 @@ final class TaskbarController: NSObject {
         setDraggedIconHidden(false)
         if !droppedInsideBar, Settings.pinnedBundleIDs.contains(bundleID) {
             Settings.pinnedBundleIDs.removeAll { $0 == bundleID }
-            AppDelegate.shared?.rebuildBars()
+            AppDelegate.shared?.rebuildBars(preserveVisibility: true)
         } else {
-            AppDelegate.shared?.rebuildBars()
+            AppDelegate.shared?.rebuildBars(preserveVisibility: true)
         }
-        scheduleHide()
     }
 
     private func setDraggedIconHidden(_ hidden: Bool) {
@@ -1259,12 +1264,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func rebuildBars() {
+    func rebuildBars(preserveVisibility: Bool = false) {
         controllers.forEach { $0.panel.orderOut(nil) }
         controllers = NSScreen.screens.map(TaskbarController.init(screen:))
         controllers.forEach {
             $0.rebuild()
-            $0.show()
+            if preserveVisibility {
+                $0.triggerPanel.orderFrontRegardless()
+                $0.reveal()
+            } else {
+                $0.show()
+            }
         }
     }
 

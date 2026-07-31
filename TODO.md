@@ -31,6 +31,7 @@
 - [x] Drag pinned app icons out of the bar to unpin them.
 - [x] Keep mbar visible in a larger interaction area while dragging/hovering.
 - [x] Live drag insertion feedback with a real stack placeholder that reflows surrounding app icons.
+- [x] Preserve revealed state after drag/drop rebuilds.
 - [x] Start menu with Applications, Desktop, Trash, system actions, and quit.
 - [x] Window-title submenu for each app.
 - [x] Attention indicator for apps requesting attention.
