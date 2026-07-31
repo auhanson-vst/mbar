@@ -21,7 +21,7 @@ Public listings and reviews describe uBar as having these capabilities:
 | Activity mode with CPU/RAM usage | Implemented via `ps` sampling |
 | Position on any screen edge | Implemented: top, bottom, left, right |
 | Adjustable rows/size/theme | Implemented: height, icon size, rows, dark/translucent style |
-| Start/menu launcher | Implemented as Applications menu |
+| Start/menu launcher | Implemented: Applications tile opens an icon popup of installed apps |
 | System actions | Implemented: sleep, restart, shutdown, lock |
 | Drag and drop | Planned |
 | Trash/Desktop shortcuts | Implemented in the menu |
@@ -47,4 +47,4 @@ launchctl kickstart -k "gui/$(id -u)/com.apple.Dock.agent"
 
 Window control is intentionally limited to public macOS APIs unless Accessibility permission is granted. The app can list public window titles from CoreGraphics and activate apps through `NSWorkspace`.
 
-The default UX is intentionally compact: mbar hides until the pointer touches the configured screen edge, then reveals a centered icon-only strip ordered as pinned/running apps, additional open apps, a separator, Applications, and Trash.
+The default UX hides until the pointer touches the configured screen edge, then reveals a centered icon-only strip ordered as pinned/running apps, additional open apps, a separator, Applications, and Trash. The Applications tile opens a direct popup of installed apps with icons.

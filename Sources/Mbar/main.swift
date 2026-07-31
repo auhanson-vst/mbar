@@ -43,17 +43,17 @@ struct Settings {
     static var barSize: CGFloat {
         get {
             let value = UserDefaults.standard.double(forKey: Key.barSize)
-            return value == 0 ? 52 : CGFloat(max(36, min(140, value)))
+            return value == 0 ? 78 : CGFloat(max(54, min(180, value)))
         }
-        set { UserDefaults.standard.set(Double(max(36, min(140, newValue))), forKey: Key.barSize) }
+        set { UserDefaults.standard.set(Double(max(54, min(180, newValue))), forKey: Key.barSize) }
     }
 
     static var iconSize: CGFloat {
         get {
             let value = UserDefaults.standard.double(forKey: Key.iconSize)
-            return value == 0 ? 28 : CGFloat(max(16, min(64, value)))
+            return value == 0 ? 42 : CGFloat(max(24, min(96, value)))
         }
-        set { UserDefaults.standard.set(Double(max(16, min(64, newValue))), forKey: Key.iconSize) }
+        set { UserDefaults.standard.set(Double(max(24, min(96, newValue))), forKey: Key.iconSize) }
     }
 
     static var pinnedBundleIDs: [String] {
@@ -451,7 +451,7 @@ final class TaskbarController: NSObject {
 
     private func addStartButton() {
         let button = TaskbarItemView(title: "Apps", image: NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "Apps"), bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openStartMenu(_:)))
-        button.menu = startMenu()
+        button.menu = applicationsMenu()
         constrain(button)
         stackView.addArrangedSubview(button)
     }
@@ -536,7 +536,7 @@ final class TaskbarController: NSObject {
 
     private func constrain(_ button: NSButton) {
         button.translatesAutoresizingMaskIntoConstraints = false
-        let tile = max(38, min(54, Settings.barSize - 14))
+        let tile = max(57, min(81, Settings.barSize - 14))
         NSLayoutConstraint.activate([
             button.heightAnchor.constraint(equalToConstant: tile),
             button.widthAnchor.constraint(equalToConstant: tile)
@@ -604,16 +604,7 @@ final class TaskbarController: NSObject {
 
     private func startMenu() -> NSMenu {
         let menu = NSMenu()
-        let appsItem = NSMenuItem(title: "Applications", action: nil, keyEquivalent: "")
-        let appsMenu = NSMenu()
-        let applicationURLs = (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: "/Applications"), includingPropertiesForKeys: nil)) ?? []
-        for url in applicationURLs.filter({ $0.pathExtension == "app" }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).prefix(80) {
-            let item = NSMenuItem(title: url.deletingPathExtension().lastPathComponent, action: #selector(menuOpenURL(_:)), keyEquivalent: "")
-            item.representedObject = url
-            appsMenu.addItem(item)
-        }
-        menu.setSubmenu(appsMenu, for: appsItem)
-        menu.addItem(appsItem)
+        menu.addItem(withTitle: "Applications", action: nil, keyEquivalent: "").submenu = applicationsMenu()
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Show Desktop", action: #selector(menuShowDesktop(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Open Trash", action: #selector(menuOpenTrash(_:)), keyEquivalent: "")
@@ -640,6 +631,39 @@ final class TaskbarController: NSObject {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit mbar", action: #selector(menuQuitApp(_:)), keyEquivalent: "q")
         return menu
+    }
+
+    private func applicationsMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for url in applicationURLs().prefix(120) {
+            let title = url.deletingPathExtension().lastPathComponent
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            icon.size = NSSize(width: 22, height: 22)
+            let item = NSMenuItem(title: title, action: #selector(menuOpenURL(_:)), keyEquivalent: "")
+            item.image = icon
+            item.representedObject = url
+            item.target = self
+            menu.addItem(item)
+        }
+        if menu.items.isEmpty {
+            menu.addItem(withTitle: "No applications found", action: nil, keyEquivalent: "").isEnabled = false
+        }
+        return menu
+    }
+
+    private func applicationURLs() -> [URL] {
+        let roots = [
+            URL(fileURLWithPath: "/Applications"),
+            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications")
+        ]
+        let urls = roots.flatMap { root in
+            ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.pathExtension == "app" }
+        }
+        return Array(Set(urls)).sorted {
+            $0.deletingPathExtension().lastPathComponent.localizedCaseInsensitiveCompare($1.deletingPathExtension().lastPathComponent) == .orderedAscending
+        }
     }
 
     @objc private func menuActivate(_ sender: NSMenuItem) {
