@@ -309,8 +309,34 @@ final class ApplicationGridPanel: NSPanel {
 }
 
 @MainActor
+final class WindowTitleContentView: NSVisualEffectView {
+    var onEnter: (() -> Void)?
+    var onExit: (() -> Void)?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onEnter?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onExit?()
+    }
+}
+
+@MainActor
 final class WindowTitlePanel: NSPanel {
     private let stackView = NSStackView()
+    var onEnter: (() -> Void)?
+    var onExit: (() -> Void)?
 
     init() {
         super.init(
@@ -325,19 +351,23 @@ final class WindowTitlePanel: NSPanel {
         backgroundColor = .clear
         hasShadow = true
 
-        let effect = NSVisualEffectView()
+        let effect = WindowTitleContentView()
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
         effect.layer?.cornerRadius = 14
         effect.layer?.cornerCurve = .continuous
+        effect.layer?.borderWidth = 0.75
+        effect.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
         effect.translatesAutoresizingMaskIntoConstraints = false
+        effect.onEnter = { [weak self] in self?.onEnter?() }
+        effect.onExit = { [weak self] in self?.onExit?() }
 
         stackView.orientation = .vertical
-        stackView.alignment = .leading
-        stackView.spacing = 5
-        stackView.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        stackView.alignment = .width
+        stackView.spacing = 4
+        stackView.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         effect.addSubview(stackView)
@@ -359,16 +389,11 @@ final class WindowTitlePanel: NSPanel {
 
         let displayedTitles = titles.isEmpty ? ["No visible windows"] : Array(titles.prefix(8))
         for title in displayedTitles {
-            let label = NSTextField(labelWithString: title)
-            label.font = .systemFont(ofSize: 12, weight: .medium)
-            label.textColor = .labelColor
-            label.lineBreakMode = .byTruncatingMiddle
-            label.maximumNumberOfLines = 1
-            stackView.addArrangedSubview(label)
+            stackView.addArrangedSubview(titleRow(title))
         }
 
-        let width = min(max(displayedTitles.map { CGFloat($0.count) * 7.0 }.max() ?? 140, 160), 360)
-        let height = CGFloat(displayedTitles.count) * 22 + 20
+        let width = min(max(displayedTitles.map { CGFloat($0.count) * 7.0 }.max() ?? 160, 220), 420)
+        let height = CGFloat(displayedTitles.count) * 30 + 16
         let size = NSSize(width: width, height: height)
         setContentSize(size)
 
@@ -408,6 +433,41 @@ final class WindowTitlePanel: NSPanel {
             }
         }
     }
+
+    private func titleRow(_ title: String) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.wantsLayer = true
+        row.layer?.cornerRadius = 8
+        row.layer?.cornerCurve = .continuous
+        row.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.07).cgColor
+
+        let icon = NSImageView(image: NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil) ?? NSImage())
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        icon.contentTintColor = .secondaryLabelColor
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.textColor = .labelColor
+        label.lineBreakMode = .byTruncatingMiddle
+        label.maximumNumberOfLines = 1
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        row.addSubview(icon)
+        row.addSubview(label)
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: 26),
+            icon.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 9),
+            icon.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 14),
+            icon.heightAnchor.constraint(equalToConstant: 14),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -9),
+            label.centerYAnchor.constraint(equalTo: row.centerYAnchor)
+        ])
+        return row
+    }
 }
 
 final class WindowCatalog {
@@ -439,21 +499,25 @@ final class WindowCatalog {
 }
 
 final class AccessibilityWindowCatalog {
+    static var isTrusted: Bool {
+        AXIsProcessTrusted()
+    }
+
     static func requestTrustIfNeeded() {
-        guard !AXIsProcessTrusted() else { return }
+        guard !isTrusted else { return }
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
     }
 
     static func windowTitles(for pid: pid_t) -> [String] {
-        guard AXIsProcessTrusted() else { return [] }
+        guard isTrusted else { return [] }
         return windows(for: pid).compactMap { window in
             windowTitle(window)
         }
     }
 
     static func unminimizeWindows(for pid: pid_t) {
-        guard AXIsProcessTrusted() else { return }
+        guard isTrusted else { return }
         for window in windows(for: pid) {
             var minimizedValue: CFTypeRef?
             let isMinimized = AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success
@@ -741,6 +805,7 @@ final class TaskbarController: NSObject {
     private var currentAppOrder: [String] = []
     private var acceptedDropBundleIDs = Set<String>()
     private var hoverWindowWorkItem: DispatchWorkItem?
+    private var windowTitleHideWorkItem: DispatchWorkItem?
 
     init(screen: NSScreen) {
         self.screen = screen
@@ -891,6 +956,15 @@ final class TaskbarController: NSObject {
             guard let self else { return }
             self.updateLiveDrop(bundleID: bundleID, at: self.hoverView.convert(point, from: self.dockBackground))
         }
+        windowTitlePanel.onEnter = { [weak self] in
+            self?.windowTitleHideWorkItem?.cancel()
+            self?.hideWorkItem?.cancel()
+            self?.reveal()
+        }
+        windowTitlePanel.onExit = { [weak self] in
+            self?.scheduleWindowTitleHide()
+            self?.scheduleHide()
+        }
 
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         stackView.alignment = .centerY
@@ -961,7 +1035,7 @@ final class TaskbarController: NSObject {
                 guard let self else { return }
                 guard !self.isDraggingIcon else { return }
                 let mouse = NSEvent.mouseLocation
-                if self.keepAliveFrame().contains(mouse) || self.triggerPanel.frame.contains(mouse) {
+                if self.keepAliveFrame().contains(mouse) || self.triggerPanel.frame.contains(mouse) || self.windowTitleKeepAliveFrame().contains(mouse) {
                     self.scheduleHide()
                 } else {
                     self.hide(animated: true)
@@ -976,6 +1050,11 @@ final class TaskbarController: NSObject {
         let inset: CGFloat = isDraggingIcon ? -180 : -18
         let verticalInset: CGFloat = isDraggingIcon ? -140 : -28
         return panel.frame.insetBy(dx: inset, dy: verticalInset)
+    }
+
+    private func windowTitleKeepAliveFrame() -> NSRect {
+        guard windowTitlePanel.isVisible else { return .null }
+        return windowTitlePanel.frame.insetBy(dx: -18, dy: -18).union(panel.frame.insetBy(dx: -24, dy: -32))
     }
 
     private func hide(animated: Bool) {
@@ -1006,7 +1085,10 @@ final class TaskbarController: NSObject {
 
     func hideForExternalInteraction(at screenPoint: NSPoint? = nil) {
         guard !isDraggingIcon else { return }
-        if let screenPoint, keepAliveFrame().contains(screenPoint) || applicationGridPanel.frame.contains(screenPoint) {
+        if let screenPoint,
+           keepAliveFrame().contains(screenPoint)
+            || applicationGridPanel.frame.contains(screenPoint)
+            || windowTitleKeepAliveFrame().contains(screenPoint) {
             return
         }
         hide(animated: true)
@@ -1065,7 +1147,7 @@ final class TaskbarController: NSObject {
             self?.scheduleWindowTitlePanel(for: app, relativeTo: button)
         }
         button.onHoverEnded = { [weak self] in
-            self?.hideWindowTitlePanel()
+            self?.scheduleWindowTitleHide()
         }
         constrain(button)
         stackView.addArrangedSubview(button)
@@ -1073,6 +1155,7 @@ final class TaskbarController: NSObject {
 
     private func scheduleWindowTitlePanel(for app: NSRunningApplication, relativeTo button: TaskbarItemView) {
         hoverWindowWorkItem?.cancel()
+        windowTitleHideWorkItem?.cancel()
         guard !isDraggingIcon else { return }
         let item = DispatchWorkItem { [weak self, weak button, weak app] in
             Task { @MainActor in
@@ -1086,8 +1169,28 @@ final class TaskbarController: NSObject {
 
     private func hideWindowTitlePanel() {
         hoverWindowWorkItem?.cancel()
+        windowTitleHideWorkItem?.cancel()
         hoverWindowWorkItem = nil
+        windowTitleHideWorkItem = nil
         windowTitlePanel.hideAnimated()
+    }
+
+    private func scheduleWindowTitleHide() {
+        hoverWindowWorkItem?.cancel()
+        windowTitleHideWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                let mouse = NSEvent.mouseLocation
+                if self.windowTitleKeepAliveFrame().contains(mouse) {
+                    self.scheduleWindowTitleHide()
+                } else {
+                    self.hideWindowTitlePanel()
+                }
+            }
+        }
+        windowTitleHideWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: item)
     }
 
     private func startIconDrag(bundleID: String) {
@@ -1382,6 +1485,9 @@ final class TaskbarController: NSObject {
                 return cgWindows.count == 1 ? appName : "\(appName) Window \(index + 1)"
             }
             return trimmed
+        }
+        if cgTitles.isEmpty && !AccessibilityWindowCatalog.isTrusted {
+            return ["Grant mbar Accessibility permission for window titles"]
         }
         return Array(NSOrderedSet(array: cgTitles)) as? [String] ?? cgTitles
     }

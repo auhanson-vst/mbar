@@ -52,7 +52,18 @@ PLIST
 printf 'APPL????' > "$contents_dir/PkgInfo"
 
 if command -v codesign >/dev/null 2>&1; then
-  codesign --force --deep --sign - "$app_dir" >/dev/null
+  signing_identity="${MBAR_CODESIGN_IDENTITY:-mbar Local Code Signing}"
+  signing_hash="$(
+    security find-identity -v -p codesigning 2>/dev/null \
+      | awk -v identity="$signing_identity" '$0 ~ "\"" identity "\"" { print $2; exit }'
+  )"
+  if [[ -n "$signing_hash" ]]; then
+    codesign --force --deep --timestamp=none --sign "$signing_hash" "$app_dir" >/dev/null
+  else
+    echo "warning: code signing identity '$signing_identity' not found; using ad-hoc signing" >&2
+    echo "warning: run scripts/create-local-codesign-cert.sh to keep Accessibility permission stable across rebuilds" >&2
+    codesign --force --deep --sign - "$app_dir" >/dev/null
+  fi
 fi
 
 echo "$app_dir"
