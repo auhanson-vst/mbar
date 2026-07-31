@@ -1107,15 +1107,19 @@ final class TaskbarController: NSObject {
 
     private func appMenu(_ app: NSRunningApplication) -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(withTitle: "Activate", action: #selector(menuActivate(_:)), keyEquivalent: "").representedObject = app
-        menu.addItem(withTitle: app.isHidden ? "Unhide" : "Hide", action: #selector(menuHide(_:)), keyEquivalent: "").representedObject = app
+        menu.autoenablesItems = false
+        addMenuItem(to: menu, title: "Activate", action: #selector(menuActivate(_:)), representedObject: app)
+        addMenuItem(to: menu, title: app.isHidden ? "Unhide" : "Hide", action: #selector(menuHide(_:)), representedObject: app)
         menu.addItem(NSMenuItem.separator())
 
         let windowMenuItem = NSMenuItem(title: "Windows", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
+        submenu.autoenablesItems = false
         for window in appWindows[app.processIdentifier] ?? [] {
             let item = NSMenuItem(title: window.title, action: #selector(menuActivate(_:)), keyEquivalent: "")
             item.representedObject = app
+            item.target = self
+            item.isEnabled = true
             submenu.addItem(item)
         }
         if submenu.items.isEmpty {
@@ -1126,17 +1130,27 @@ final class TaskbarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
         if let bundleID = app.bundleIdentifier, Settings.pinnedBundleIDs.contains(bundleID) {
-            menu.addItem(withTitle: "Unpin from mbar", action: #selector(menuUnpin(_:)), keyEquivalent: "").representedObject = bundleID
+            addMenuItem(to: menu, title: "Unpin from mbar", action: #selector(menuUnpin(_:)), representedObject: bundleID)
         } else if let bundleID = app.bundleIdentifier {
-            menu.addItem(withTitle: "Pin to mbar", action: #selector(menuPin(_:)), keyEquivalent: "").representedObject = bundleID
+            addMenuItem(to: menu, title: "Pin to mbar", action: #selector(menuPin(_:)), representedObject: bundleID)
         }
-        menu.addItem(withTitle: "Quit", action: #selector(menuQuit(_:)), keyEquivalent: "").representedObject = app
+        addMenuItem(to: menu, title: "Quit", action: #selector(menuQuit(_:)), representedObject: app)
         let forceQuitItem = NSMenuItem(title: "Force Quit", action: #selector(menuForceQuit(_:)), keyEquivalent: "")
         forceQuitItem.representedObject = app
+        forceQuitItem.target = self
+        forceQuitItem.isEnabled = true
         forceQuitItem.isAlternate = true
         forceQuitItem.keyEquivalentModifierMask = [.option]
         menu.addItem(forceQuitItem)
         return menu
+    }
+
+    private func addMenuItem(to menu: NSMenu, title: String, action: Selector, representedObject: Any) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.representedObject = representedObject
+        item.target = self
+        item.isEnabled = true
+        menu.addItem(item)
     }
 
     private func pinnedMenu(bundleID: String) -> NSMenu {
