@@ -630,6 +630,75 @@ final class AccessibilityWindowCatalog {
     }
 }
 
+final class DockBadgeCatalog {
+    static func badgeTexts() -> [String: String] {
+        guard AccessibilityWindowCatalog.isTrusted,
+              let dock = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.dock" })
+        else {
+            return [:]
+        }
+
+        var badges: [String: String] = [:]
+        collectBadges(from: AXUIElementCreateApplication(dock.processIdentifier), into: &badges)
+        return badges
+    }
+
+    private static func collectBadges(from element: AXUIElement, into badges: inout [String: String]) {
+        if role(of: element) == "AXDockItem",
+           let status = stringAttribute(element, "AXStatusLabel"),
+           let badge = displayBadge(from: status),
+           let bundleID = bundleIdentifier(for: element) {
+            badges[bundleID] = badge
+        }
+
+        guard let children = attribute(element, kAXChildrenAttribute as String) as? [AXUIElement] else { return }
+        for child in children {
+            collectBadges(from: child, into: &badges)
+        }
+    }
+
+    private static func bundleIdentifier(for element: AXUIElement) -> String? {
+        guard let url = urlAttribute(element, "AXURL"), url.isFileURL else { return nil }
+        return Bundle(url: url)?.bundleIdentifier
+    }
+
+    private static func displayBadge(from status: String) -> String? {
+        let trimmed = status.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let digits = trimmed.split(whereSeparator: { !$0.isNumber }).first,
+           let count = Int(digits) {
+            guard count > 0 else { return nil }
+            return count > 99 ? "99+" : "\(count)"
+        }
+        return "•"
+    }
+
+    private static func role(of element: AXUIElement) -> String? {
+        stringAttribute(element, kAXRoleAttribute as String)
+    }
+
+    private static func stringAttribute(_ element: AXUIElement, _ name: String) -> String? {
+        attribute(element, name) as? String
+    }
+
+    private static func urlAttribute(_ element: AXUIElement, _ name: String) -> URL? {
+        let value = attribute(element, name)
+        if let url = value as? URL {
+            return url
+        }
+        if let string = value as? String {
+            return URL(string: string)
+        }
+        return nil
+    }
+
+    private static func attribute(_ element: AXUIElement, _ name: String) -> Any? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        return value
+    }
+}
+
 final class ActivitySampler {
     static func samples(for pids: [pid_t]) -> [pid_t: ProcessSample] {
         guard !pids.isEmpty else { return [:] }
@@ -875,6 +944,7 @@ final class TaskbarController: NSObject {
     private var runningApps: [String: NSRunningApplication] = [:]
     private var appWindows: [pid_t: [WindowInfo]] = [:]
     private var activitySamples: [pid_t: ProcessSample] = [:]
+    private var dockBadges: [String: String] = [:]
     private var hideWorkItem: DispatchWorkItem?
     private var isRevealed = false
     private var isDraggingIcon = false
@@ -964,6 +1034,7 @@ final class TaskbarController: NSObject {
             guard let bundleID = app.bundleIdentifier else { return nil }
             return (bundleID, app)
         })
+        dockBadges = DockBadgeCatalog.badgeTexts()
 
         if Settings.activityMode {
             activitySamples = ActivitySampler.samples(for: apps.map(\.processIdentifier))
@@ -1459,6 +1530,10 @@ final class TaskbarController: NSObject {
     }
 
     private func badgeText(for app: NSRunningApplication) -> String? {
+        if let bundleID = app.bundleIdentifier, let dockBadge = dockBadges[bundleID] {
+            return dockBadge
+        }
+
         let windowCount = appWindows[app.processIdentifier]?.count ?? 0
         if windowCount > 1 {
             return windowCount > 9 ? "9+" : "\(windowCount)"
