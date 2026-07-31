@@ -54,3 +54,5 @@ Drag app icons within the bar to reorder/pin them. While dragging, mbar stays op
 After dropping, mbar preserves the revealed state instead of immediately hiding.
 
 The normal hover keep-alive region is tight so the bar hides promptly. During drag, the keep-alive region expands substantially. App icons show a small red badge when mbar can detect multiple visible windows for that app through public window APIs.
+
+mbar also hides when you type or click outside the bar/application grid.

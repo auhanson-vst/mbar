@@ -457,7 +457,8 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
         let width: CGFloat = showsActiveIndicator ? 18 : 0
         activeIndicator.frame = CGRect(x: (bounds.width - width) / 2, y: 4, width: width, height: 4)
         let badgeWidth: CGFloat = badgeText.map { $0.count > 1 ? 24 : 18 } ?? 18
-        badgeLayer.frame = CGRect(x: bounds.maxX - badgeWidth - 5, y: bounds.maxY - 22, width: badgeWidth, height: 18)
+        let badgeY = isFlipped ? 3 : bounds.maxY - 15
+        badgeLayer.frame = CGRect(x: bounds.maxX - badgeWidth - 3, y: badgeY, width: badgeWidth, height: 18)
         badgeTextLayer.frame = badgeLayer.bounds.insetBy(dx: 2, dy: 2)
         layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 15, cornerHeight: 15, transform: nil)
     }
@@ -804,6 +805,14 @@ final class TaskbarController: NSObject {
             panel.orderOut(nil)
             panel.alphaValue = 1
         }
+    }
+
+    func hideForExternalInteraction(at screenPoint: NSPoint? = nil) {
+        guard !isDraggingIcon else { return }
+        if let screenPoint, keepAliveFrame().contains(screenPoint) || applicationGridPanel.frame.contains(screenPoint) {
+            return
+        }
+        hide(animated: true)
     }
 
     private func addStartButton() {
@@ -1280,6 +1289,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate?
     private var controllers: [TaskbarController] = []
     private var timer: Timer?
+    private var globalEventMonitor: Any?
+    private var localEventMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
@@ -1299,6 +1310,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.controllers.forEach { $0.rebuild() }
             }
         }
+
+        installInteractionMonitors()
     }
 
     func rebuildBars(preserveVisibility: Bool = false) {
@@ -1321,6 +1334,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func screenChanged(_ notification: Notification) {
         rebuildBars()
+    }
+
+    private func installInteractionMonitors() {
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]
+        globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
+            Task { @MainActor in
+                self?.handleExternalInteraction(event)
+            }
+        }
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            self?.handleExternalInteraction(event)
+            return event
+        }
+    }
+
+    private func handleExternalInteraction(_ event: NSEvent) {
+        switch event.type {
+        case .keyDown:
+            controllers.forEach { $0.hideForExternalInteraction() }
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            controllers.forEach { $0.hideForExternalInteraction(at: NSEvent.mouseLocation) }
+        default:
+            break
+        }
     }
 }
 
