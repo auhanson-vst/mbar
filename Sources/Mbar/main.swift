@@ -163,19 +163,22 @@ final class TaskbarItemView: NSButton {
     private let normalBackground: CGColor
     private let hoverBackground: CGColor
     private let pressedBackground: CGColor
+    private let activeIndicator = CALayer()
+    private let showsActiveIndicator: Bool
 
     init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isHidden: Bool = false, attention: Bool = false, target: AnyObject?, action: Selector?) {
         self.representedBundleID = bundleID
         self.representedPID = pid
+        self.showsActiveIndicator = isActive || pid != nil
         let baseColor: NSColor = {
-            if attention { return .systemRed.withAlphaComponent(0.28) }
-            if isActive { return .controlAccentColor.withAlphaComponent(0.22) }
-            if isHidden { return .white.withAlphaComponent(0.05) }
-            return .white.withAlphaComponent(0.11)
+            if attention { return .systemRed.withAlphaComponent(0.18) }
+            if isActive { return .controlAccentColor.withAlphaComponent(0.24) }
+            if isHidden { return .labelColor.withAlphaComponent(0.04) }
+            return .labelColor.withAlphaComponent(0.08)
         }()
         self.normalBackground = baseColor.cgColor
-        self.hoverBackground = baseColor.blended(withFraction: 0.35, of: .white)?.cgColor ?? NSColor.white.withAlphaComponent(0.2).cgColor
-        self.pressedBackground = NSColor.controlAccentColor.withAlphaComponent(0.34).cgColor
+        self.hoverBackground = baseColor.blended(withFraction: 0.18, of: .controlAccentColor)?.withAlphaComponent(0.28).cgColor ?? NSColor.controlAccentColor.withAlphaComponent(0.24).cgColor
+        self.pressedBackground = NSColor.controlAccentColor.withAlphaComponent(0.38).cgColor
         super.init(frame: .zero)
         self.title = ""
         self.image = image
@@ -188,12 +191,21 @@ final class TaskbarItemView: NSButton {
         self.toolTip = title
         self.imageScaling = .scaleProportionallyUpOrDown
         wantsLayer = true
-        layer?.cornerRadius = 9
+        layer?.cornerRadius = 15
         layer?.cornerCurve = .continuous
-        layer?.borderWidth = isActive ? 1 : 0
-        layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.75).cgColor
+        layer?.borderWidth = 0.75
+        layer?.borderColor = (isActive ? NSColor.controlAccentColor.withAlphaComponent(0.65) : NSColor.separatorColor.withAlphaComponent(0.28)).cgColor
         layer?.backgroundColor = normalBackground
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.16
+        layer?.shadowRadius = 10
+        layer?.shadowOffset = NSSize(width: 0, height: 4)
         contentTintColor = isHidden ? .tertiaryLabelColor : nil
+
+        activeIndicator.backgroundColor = (isActive ? NSColor.controlAccentColor : NSColor.secondaryLabelColor.withAlphaComponent(0.72)).cgColor
+        activeIndicator.cornerRadius = 2
+        activeIndicator.isHidden = !showsActiveIndicator
+        layer?.addSublayer(activeIndicator)
     }
 
     required init?(coder: NSCoder) {
@@ -212,12 +224,12 @@ final class TaskbarItemView: NSButton {
 
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
-        animateTile(background: hoverBackground, scale: 1.08)
+        animateTile(background: hoverBackground, scale: 1.12, shadowOpacity: 0.26)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        animateTile(background: normalBackground, scale: 1.0)
+        animateTile(background: normalBackground, scale: 1.0, shadowOpacity: 0.16)
     }
 
     override var isHighlighted: Bool {
@@ -226,12 +238,20 @@ final class TaskbarItemView: NSButton {
         }
     }
 
-    private func animateTile(background: CGColor, scale: CGFloat) {
+    override func layout() {
+        super.layout()
+        let width: CGFloat = showsActiveIndicator ? 18 : 0
+        activeIndicator.frame = CGRect(x: (bounds.width - width) / 2, y: 4, width: width, height: 4)
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 15, cornerHeight: 15, transform: nil)
+    }
+
+    private func animateTile(background: CGColor, scale: CGFloat, shadowOpacity: Float) {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             animator().layer?.backgroundColor = background
             animator().layer?.transform = CATransform3DMakeScale(scale, scale, 1)
+            animator().layer?.shadowOpacity = shadowOpacity
         }
     }
 }
@@ -366,8 +386,8 @@ final class TaskbarController: NSObject {
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         stackView.alignment = .centerY
         stackView.distribution = .gravityAreas
-        stackView.spacing = 7
-        stackView.edgeInsets = NSEdgeInsets(top: 7, left: 10, bottom: 7, right: 10)
+        stackView.spacing = 10
+        stackView.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         hoverView.onEnter = { [weak self] in self?.reveal() }
@@ -392,10 +412,10 @@ final class TaskbarController: NSObject {
         triggerView.onEnter = { [weak self] in self?.reveal() }
         triggerView.onExit = { [weak self] in self?.scheduleHide() }
         triggerView.wantsLayer = true
-        triggerView.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.08).cgColor
+        triggerView.layer?.backgroundColor = NSColor.clear.cgColor
         triggerPanel.contentView = triggerView
         triggerPanel.hasShadow = false
-        triggerPanel.alphaValue = 0.45
+        triggerPanel.alphaValue = 0.01
     }
 
     private func reveal() {
@@ -476,21 +496,24 @@ final class TaskbarController: NSObject {
         let title = titleFor(app)
         let icon = app.icon ?? NSImage(systemSymbolName: "app", accessibilityDescription: title)
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
-        let attention = app.isHidden == false && app.isActive == false && appWindows[app.processIdentifier]?.isEmpty == false
-        let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isHidden: app.isHidden, attention: attention, target: self, action: #selector(activateApp(_:)))
+        let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isHidden: app.isHidden, attention: false, target: self, action: #selector(activateApp(_:)))
         button.menu = appMenu(app)
         constrain(button)
         stackView.addArrangedSubview(button)
     }
 
     private func addSeparator() {
-        let separator = NSBox()
-        separator.boxType = .separator
+        let separator = NSView()
+        separator.wantsLayer = true
+        separator.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
+        separator.layer?.cornerRadius = 1
         separator.translatesAutoresizingMaskIntoConstraints = false
         if Settings.edge == .left || Settings.edge == .right {
-            separator.widthAnchor.constraint(equalToConstant: Settings.barSize - 20).isActive = true
+            separator.widthAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
+            separator.heightAnchor.constraint(equalToConstant: 2).isActive = true
         } else {
-            separator.heightAnchor.constraint(equalToConstant: Settings.barSize - 20).isActive = true
+            separator.widthAnchor.constraint(equalToConstant: 2).isActive = true
+            separator.heightAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
         }
         stackView.addArrangedSubview(separator)
     }
@@ -521,11 +544,7 @@ final class TaskbarController: NSObject {
     }
 
     private func shouldShow(app: NSRunningApplication) -> Bool {
-        guard !Settings.mirror else { return true }
-        guard let windows = appWindows[app.processIdentifier], !windows.isEmpty else {
-            return app.bundleIdentifier.map { Settings.pinnedBundleIDs.contains($0) } ?? false
-        }
-        return windows.contains { screen.frame.intersects($0.bounds) }
+        true
     }
 
     private func appSort(_ lhs: NSRunningApplication, _ rhs: NSRunningApplication) -> Bool {

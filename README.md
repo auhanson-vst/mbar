@@ -14,8 +14,8 @@ Public listings and reviews describe uBar as having these capabilities:
 | Group windows by application or show separately | Implemented as grouped-by-app; separate-window mode is planned |
 | Pin/favorite apps, files, and folders | App pins implemented; files/folders planned |
 | Multiple monitor support | Implemented: one bar per screen |
-| Mirror mode across monitors | Implemented |
-| Per-monitor apps/windows | Implemented using public CoreGraphics window bounds |
+| Mirror mode across monitors | Implemented as the default behavior: every display shows all open apps |
+| Per-monitor apps/windows | Replaced by all-open-apps-on-every-display behavior |
 | Window previews on hover | Planned; current build shows window titles |
 | Badges and app attention flashes | Attention state implemented; notification badges planned |
 | Activity mode with CPU/RAM usage | Implemented via `ps` sampling |
@@ -47,4 +47,4 @@ launchctl kickstart -k "gui/$(id -u)/com.apple.Dock.agent"
 
 Window control is intentionally limited to public macOS APIs unless Accessibility permission is granted. The app can list public window titles from CoreGraphics and activate apps through `NSWorkspace`.
 
-The default UX hides until the pointer touches the configured screen edge, then reveals a centered icon-only strip ordered as pinned/running apps, additional open apps, a separator, Applications, and Trash. The Applications tile opens a direct popup of installed apps with icons.
+The default UX hides until the pointer touches the configured screen edge, then reveals a centered icon-only strip ordered as pinned/running apps, additional open apps, a separator, Applications, and Trash. Every display shows the same open-app set. The Applications tile opens a direct popup of installed apps with icons.

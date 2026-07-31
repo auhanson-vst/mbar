@@ -18,6 +18,8 @@
 - [x] Centered Dock-style icon ordering: pinned/running apps, open apps, separator, Applications, Trash.
 - [x] Larger Dock-like default bar and icon sizing.
 - [x] Applications tile opens a direct app-icon popup.
+- [x] Every display shows all open applications, regardless of where their windows are.
+- [x] Refined tile aesthetics with hover scale, softer borders/shadows, active/open indicators, and invisible edge trigger.
 - [x] Start menu with Applications, Desktop, Trash, system actions, and quit.
 - [x] Window-title submenu for each app.
 - [x] Attention indicator for apps requesting attention.
