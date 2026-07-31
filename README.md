@@ -64,7 +64,7 @@ Window control is intentionally limited to public macOS APIs unless Accessibilit
 
 The default UX hides until the pointer touches the configured screen edge, then quickly reveals a single translucent Dock-style section containing a centered icon-only strip ordered as pinned/running apps, additional open apps, a separator, native Applications folder icon, and native Trash icon. Every display shows the same deduplicated open-app set. The Applications tile opens a compact icon grid of installed apps.
 
-Drag app icons within the bar to reorder/pin them. While dragging, mbar stays open and inserts a live placeholder into the icon strip so surrounding app icons reflow around the insertion point. Drag a pinned app icon out of the expanded interaction area to unpin it.
+Drag app icons within the bar to reorder/pin them. While dragging, mbar stays open and shows a stable insertion marker for the drop position. Drag a pinned app icon out of the expanded interaction area to unpin it.
 
 After dropping, mbar preserves the revealed state instead of immediately hiding.
 
@@ -77,3 +77,5 @@ Reveal and hide use a Dock-like slide animation from the configured screen edge.
 Window title menus prefer Accessibility API titles, then fall back to CoreGraphics titles and generated labels for untitled visible windows. macOS may require granting mbar Accessibility permission for titles that match real app/window titles. Hovering over an app icon for 0.75 seconds shows an animated window-title list above the icon.
 
 When Accessibility permission is granted, activating an app from mbar unminimizes its windows before bringing the app forward.
+
+Finder is always filtered out of mbar, even if macOS reports it as a running app or it was previously saved in pinned items.

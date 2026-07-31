@@ -30,8 +30,9 @@
 - [x] Drag app icons within the bar to reorder/pin them.
 - [x] Drag pinned app icons out of the bar to unpin them.
 - [x] Keep mbar visible in a larger interaction area while dragging/hovering.
-- [x] Live drag insertion feedback with a real stack placeholder that reflows surrounding app icons.
+- [x] Stable drag insertion marker for deterministic reordering.
 - [x] Preserve revealed state after drag/drop rebuilds.
+- [x] Always hide Finder from app rendering and saved pins.
 - [x] Small normal hover keep-alive area with larger drag-only keep-alive area.
 - [x] Activity badge layer showing detectable multi-window app activity.
 - [x] Hide on typing or clicking outside mbar.

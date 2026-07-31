@@ -3,6 +3,7 @@ import ApplicationServices
 import CoreGraphics
 
 let appDragPasteboardType = NSPasteboard.PasteboardType("dev.auhanson.mbar.bundle-id")
+let finderBundleID = "com.apple.finder"
 
 enum Edge: String, CaseIterable {
     case bottom
@@ -59,8 +60,18 @@ struct Settings {
     }
 
     static var pinnedBundleIDs: [String] {
-        get { UserDefaults.standard.stringArray(forKey: Key.pinnedBundleIDs) ?? [] }
-        set { UserDefaults.standard.set(Array(NSOrderedSet(array: newValue)) as? [String] ?? newValue, forKey: Key.pinnedBundleIDs) }
+        get {
+            let saved = UserDefaults.standard.stringArray(forKey: Key.pinnedBundleIDs) ?? []
+            let filtered = saved.filter { $0 != finderBundleID }
+            if filtered.count != saved.count {
+                UserDefaults.standard.set(Array(NSOrderedSet(array: filtered)) as? [String] ?? filtered, forKey: Key.pinnedBundleIDs)
+            }
+            return filtered
+        }
+        set {
+            let filtered = newValue.filter { $0 != finderBundleID }
+            UserDefaults.standard.set(Array(NSOrderedSet(array: filtered)) as? [String] ?? filtered, forKey: Key.pinnedBundleIDs)
+        }
     }
 }
 
@@ -726,7 +737,9 @@ final class TaskbarController: NSObject {
     private var isDraggingIcon = false
     private var draggedBundleID: String?
     private var liveDropIndex: Int?
-    private var dragPlaceholder: NSView?
+    private var insertionMarker: NSView?
+    private var currentAppOrder: [String] = []
+    private var acceptedDropBundleIDs = Set<String>()
     private var hoverWindowWorkItem: DispatchWorkItem?
 
     init(screen: NSScreen) {
@@ -798,7 +811,9 @@ final class TaskbarController: NSObject {
         appWindows = Dictionary(grouping: windows, by: \.ownerPID)
         let apps = NSWorkspace.shared.runningApplications
             .filter { app in
-                app.activationPolicy == .regular && app.bundleIdentifier != Bundle.main.bundleIdentifier
+                app.activationPolicy == .regular
+                    && app.bundleIdentifier != Bundle.main.bundleIdentifier
+                    && app.bundleIdentifier != finderBundleID
             }
 
         runningApps = Dictionary(uniqueKeysWithValues: apps.compactMap { app in
@@ -817,17 +832,17 @@ final class TaskbarController: NSObject {
             view.removeFromSuperview()
         }
 
-        let pinnedIDs = Settings.pinnedBundleIDs
+        let pinnedIDs = Settings.pinnedBundleIDs.filter { $0 != finderBundleID }
         var renderedBundleIDs = Set<String>()
         var renderedPIDs = Set<pid_t>()
-        var appSlotIndex = 0
+        var rebuiltAppOrder: [String] = []
         for bundleID in pinnedIDs {
             addPinnedItem(bundleID: bundleID)
+            rebuiltAppOrder.append(bundleID)
             renderedBundleIDs.insert(bundleID)
             if let pid = runningApps[bundleID]?.processIdentifier {
                 renderedPIDs.insert(pid)
             }
-            appSlotIndex += 1
         }
 
         for app in apps.sorted(by: appSort) {
@@ -839,9 +854,10 @@ final class TaskbarController: NSObject {
             renderedPIDs.insert(app.processIdentifier)
             if let bundleID = app.bundleIdentifier {
                 renderedBundleIDs.insert(bundleID)
+                rebuiltAppOrder.append(bundleID)
             }
-            appSlotIndex += 1
         }
+        currentAppOrder = rebuiltAppOrder
 
         addSeparator()
         addStartButton()
@@ -1005,6 +1021,7 @@ final class TaskbarController: NSObject {
     }
 
     private func addPinnedItem(bundleID: String) {
+        guard bundleID != finderBundleID else { return }
         if let app = runningApps[bundleID] {
             addAppItem(app)
             return
@@ -1074,6 +1091,7 @@ final class TaskbarController: NSObject {
     }
 
     private func startIconDrag(bundleID: String) {
+        guard bundleID != finderBundleID else { return }
         isDraggingIcon = true
         draggedBundleID = bundleID
         liveDropIndex = nil
@@ -1082,62 +1100,70 @@ final class TaskbarController: NSObject {
     }
 
     private func drop(bundleID: String, at point: CGPoint) -> Bool {
+        guard bundleID != finderBundleID else { return false }
         guard runningApps[bundleID] != nil || NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil else {
             return false
         }
 
-        var pins = Settings.pinnedBundleIDs.filter { $0 != bundleID }
+        var pins = currentAppOrder.filter { $0 != bundleID && $0 != finderBundleID }
         let insertionIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
         pins.insert(bundleID, at: min(insertionIndex, pins.count))
+        acceptedDropBundleIDs.insert(bundleID)
         Settings.pinnedBundleIDs = pins
         AppDelegate.shared?.rebuildBars(preserveVisibility: true)
         return true
     }
 
     private func updateLiveDrop(bundleID: String, at point: CGPoint) {
-        guard isDraggingIcon else { return }
+        guard isDraggingIcon, bundleID != finderBundleID else { return }
         let newIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
         guard liveDropIndex != newIndex else { return }
         liveDropIndex = newIndex
-        moveDragPlaceholder(toAppSlot: newIndex)
+        moveInsertionMarker(toAppSlot: newIndex)
     }
 
-    private func moveDragPlaceholder(toAppSlot appSlot: Int) {
-        let placeholder = dragPlaceholder ?? makeDragPlaceholder()
-        dragPlaceholder = placeholder
-        if placeholder.superview != nil {
-            stackView.removeArrangedSubview(placeholder)
-            placeholder.removeFromSuperview()
+    private func moveInsertionMarker(toAppSlot appSlot: Int) {
+        let marker = insertionMarker ?? makeInsertionMarker()
+        insertionMarker = marker
+        if marker.superview != nil {
+            stackView.removeArrangedSubview(marker)
+            marker.removeFromSuperview()
         }
 
         let arrangedIndex = arrangedSubviewIndex(forAppSlot: appSlot)
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.09
+            context.duration = 0.06
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            stackView.insertArrangedSubview(placeholder, at: arrangedIndex)
+            stackView.insertArrangedSubview(marker, at: arrangedIndex)
             stackView.layoutSubtreeIfNeeded()
         }
     }
 
-    private func makeDragPlaceholder() -> NSView {
-        let placeholder = NSView()
-        placeholder.translatesAutoresizingMaskIntoConstraints = false
-        placeholder.wantsLayer = true
-        placeholder.layer?.cornerRadius = 14
-        placeholder.layer?.cornerCurve = .continuous
-        placeholder.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.20).cgColor
-        let tile = max(57, min(81, Settings.barSize - 14))
-        NSLayoutConstraint.activate([
-            placeholder.widthAnchor.constraint(equalToConstant: tile),
-            placeholder.heightAnchor.constraint(equalToConstant: tile)
-        ])
-        return placeholder
+    private func makeInsertionMarker() -> NSView {
+        let marker = NSView()
+        marker.translatesAutoresizingMaskIntoConstraints = false
+        marker.wantsLayer = true
+        marker.layer?.cornerRadius = 2
+        marker.layer?.cornerCurve = .continuous
+        marker.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        if Settings.edge == .left || Settings.edge == .right {
+            NSLayoutConstraint.activate([
+                marker.widthAnchor.constraint(equalToConstant: Settings.barSize - 28),
+                marker.heightAnchor.constraint(equalToConstant: 4)
+            ])
+        } else {
+            NSLayoutConstraint.activate([
+                marker.widthAnchor.constraint(equalToConstant: 4),
+                marker.heightAnchor.constraint(equalToConstant: Settings.barSize - 28)
+            ])
+        }
+        return marker
     }
 
     private func arrangedSubviewIndex(forAppSlot appSlot: Int) -> Int {
         var appIndex = 0
         for (arrangedIndex, view) in stackView.arrangedSubviews.enumerated() {
-            if view === dragPlaceholder { continue }
+            if view === insertionMarker { continue }
             guard let item = view as? TaskbarItemView, item.representedBundleID != nil else {
                 return arrangedIndex
             }
@@ -1170,9 +1196,10 @@ final class TaskbarController: NSObject {
         isDraggingIcon = false
         draggedBundleID = nil
         liveDropIndex = nil
-        removeDragPlaceholder()
+        removeInsertionMarker()
         setDraggedIconHidden(false)
-        if !droppedInsideBar, Settings.pinnedBundleIDs.contains(bundleID) {
+        let wasAcceptedDrop = acceptedDropBundleIDs.remove(bundleID) != nil
+        if !droppedInsideBar, !wasAcceptedDrop, Settings.pinnedBundleIDs.contains(bundleID) {
             Settings.pinnedBundleIDs.removeAll { $0 == bundleID }
             AppDelegate.shared?.rebuildBars(preserveVisibility: true)
         } else {
@@ -1189,11 +1216,11 @@ final class TaskbarController: NSObject {
         }
     }
 
-    private func removeDragPlaceholder() {
-        guard let dragPlaceholder else { return }
-        stackView.removeArrangedSubview(dragPlaceholder)
-        dragPlaceholder.removeFromSuperview()
-        self.dragPlaceholder = nil
+    private func removeInsertionMarker() {
+        guard let insertionMarker else { return }
+        stackView.removeArrangedSubview(insertionMarker)
+        insertionMarker.removeFromSuperview()
+        self.insertionMarker = nil
     }
 
     private func addSeparator() {
