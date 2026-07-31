@@ -20,6 +20,7 @@ struct Settings {
         static let rows = "rows"
         static let barSize = "barSize"
         static let iconSize = "iconSize"
+        static let itemSpacing = "itemSpacing"
         static let showFinder = "showFinder"
         static let showApplications = "showApplications"
         static let showTrash = "showTrash"
@@ -60,6 +61,14 @@ struct Settings {
             return value == 0 ? 42 : CGFloat(max(24, min(96, value)))
         }
         set { UserDefaults.standard.set(Double(max(24, min(96, newValue))), forKey: Key.iconSize) }
+    }
+
+    static var itemSpacing: CGFloat {
+        get {
+            let value = UserDefaults.standard.double(forKey: Key.itemSpacing)
+            return value == 0 ? 9 : CGFloat(max(0, min(32, value)))
+        }
+        set { UserDefaults.standard.set(Double(max(0, min(32, newValue))), forKey: Key.itemSpacing) }
     }
 
     static var showFinder: Bool {
@@ -967,6 +976,8 @@ final class SettingsWindowController: NSWindowController {
     private let barSizeValueLabel = NSTextField(labelWithString: "")
     private let iconSizeSlider = NSSlider(value: 0, minValue: 24, maxValue: 96, target: nil, action: nil)
     private let iconSizeValueLabel = NSTextField(labelWithString: "")
+    private let itemSpacingSlider = NSSlider(value: 0, minValue: 0, maxValue: 32, target: nil, action: nil)
+    private let itemSpacingValueLabel = NSTextField(labelWithString: "")
     private let activityCheckbox = NSButton(checkboxWithTitle: "Show CPU and memory in app labels", target: nil, action: nil)
     private let accessibilityStatusLabel = NSTextField(labelWithString: "")
     private let showFinderCheckbox = NSButton(checkboxWithTitle: "Show Finder", target: nil, action: nil)
@@ -1152,6 +1163,8 @@ final class SettingsWindowController: NSWindowController {
         barSizeSlider.action = #selector(barSizeChanged(_:))
         iconSizeSlider.target = self
         iconSizeSlider.action = #selector(iconSizeChanged(_:))
+        itemSpacingSlider.target = self
+        itemSpacingSlider.action = #selector(itemSpacingChanged(_:))
 
         return section(
             title: "Layout",
@@ -1160,7 +1173,8 @@ final class SettingsWindowController: NSWindowController {
                 row("Position", edgePopup),
                 row("Rows", pair(rowsStepper, rowsValueLabel)),
                 row("Bar size", pair(barSizeSlider, barSizeValueLabel)),
-                row("Icon size", pair(iconSizeSlider, iconSizeValueLabel))
+                row("Icon size", pair(iconSizeSlider, iconSizeValueLabel)),
+                row("Item spacing", pair(itemSpacingSlider, itemSpacingValueLabel))
             ]
         )
     }
@@ -1313,6 +1327,8 @@ final class SettingsWindowController: NSWindowController {
         barSizeValueLabel.stringValue = "\(Int(Settings.barSize)) px"
         iconSizeSlider.doubleValue = Double(Settings.iconSize)
         iconSizeValueLabel.stringValue = "\(Int(Settings.iconSize)) px"
+        itemSpacingSlider.doubleValue = Double(Settings.itemSpacing)
+        itemSpacingValueLabel.stringValue = "\(Int(Settings.itemSpacing)) px"
         activityCheckbox.state = Settings.activityMode ? .on : .off
         showFinderCheckbox.state = Settings.showFinder ? .on : .off
         showApplicationsCheckbox.state = Settings.showApplications ? .on : .off
@@ -1341,6 +1357,12 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func iconSizeChanged(_ sender: NSSlider) {
         Settings.iconSize = CGFloat(sender.doubleValue)
+        refreshControls()
+        AppDelegate.shared?.rebuildBarsInPlace()
+    }
+
+    @objc private func itemSpacingChanged(_ sender: NSSlider) {
+        Settings.itemSpacing = CGFloat(sender.doubleValue)
         refreshControls()
         AppDelegate.shared?.rebuildBarsInPlace()
     }
@@ -1379,6 +1401,7 @@ final class SettingsWindowController: NSWindowController {
         Settings.rows = 1
         Settings.barSize = 78
         Settings.iconSize = 42
+        Settings.itemSpacing = 9
         refreshControls()
         AppDelegate.shared?.rebuildBars()
     }
@@ -1806,7 +1829,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         stackView.alignment = .centerY
         stackView.distribution = .gravityAreas
-        stackView.spacing = 9
+        stackView.spacing = Settings.itemSpacing
         stackView.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
