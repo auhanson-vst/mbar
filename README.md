@@ -52,3 +52,5 @@ The default UX hides until the pointer touches the configured screen edge, then 
 Drag app icons within the bar to reorder/pin them. While dragging, mbar stays open and inserts a live placeholder into the icon strip so surrounding app icons reflow around the insertion point. Drag a pinned app icon out of the expanded interaction area to unpin it.
 
 After dropping, mbar preserves the revealed state instead of immediately hiding.
+
+The normal hover keep-alive region is tight so the bar hides promptly. During drag, the keep-alive region expands substantially. App icons show a small red badge when mbar can detect multiple visible windows for that app through public window APIs.

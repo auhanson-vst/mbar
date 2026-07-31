@@ -362,16 +362,20 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     let representedPID: pid_t?
     private let displayTitle: String
     private let activeIndicator = CALayer()
+    private let badgeLayer = CALayer()
+    private let badgeTextLayer = CATextLayer()
     private let showsActiveIndicator: Bool
+    private let badgeText: String?
     private var mouseDownEvent: NSEvent?
     var onDragStarted: (() -> Void)?
     var onDragFinished: ((String, Bool) -> Void)?
 
-    init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isHidden: Bool = false, attention: Bool = false, target: AnyObject?, action: Selector?) {
+    init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isHidden: Bool = false, attention: Bool = false, badgeText: String? = nil, target: AnyObject?, action: Selector?) {
         self.representedBundleID = bundleID
         self.representedPID = pid
         self.displayTitle = title
         self.showsActiveIndicator = isActive || pid != nil
+        self.badgeText = badgeText
         super.init(frame: .zero)
         self.title = ""
         self.image = image
@@ -397,6 +401,25 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
         activeIndicator.cornerRadius = 2
         activeIndicator.isHidden = !showsActiveIndicator
         layer?.addSublayer(activeIndicator)
+
+        badgeLayer.backgroundColor = NSColor.systemRed.cgColor
+        badgeLayer.borderColor = NSColor.windowBackgroundColor.cgColor
+        badgeLayer.borderWidth = 1.5
+        badgeLayer.cornerRadius = 9
+        badgeLayer.isHidden = badgeText == nil
+        badgeLayer.shadowColor = NSColor.black.cgColor
+        badgeLayer.shadowOpacity = 0.18
+        badgeLayer.shadowRadius = 4
+        badgeLayer.shadowOffset = NSSize(width: 0, height: 1)
+
+        badgeTextLayer.string = badgeText
+        badgeTextLayer.alignmentMode = .center
+        badgeTextLayer.font = NSFont.systemFont(ofSize: 10, weight: .bold)
+        badgeTextLayer.fontSize = 10
+        badgeTextLayer.foregroundColor = NSColor.white.cgColor
+        badgeTextLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        badgeLayer.addSublayer(badgeTextLayer)
+        layer?.addSublayer(badgeLayer)
     }
 
     required init?(coder: NSCoder) {
@@ -433,6 +456,9 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
         super.layout()
         let width: CGFloat = showsActiveIndicator ? 18 : 0
         activeIndicator.frame = CGRect(x: (bounds.width - width) / 2, y: 4, width: width, height: 4)
+        let badgeWidth: CGFloat = badgeText.map { $0.count > 1 ? 24 : 18 } ?? 18
+        badgeLayer.frame = CGRect(x: bounds.maxX - badgeWidth - 5, y: bounds.maxY - 22, width: badgeWidth, height: 18)
+        badgeTextLayer.frame = badgeLayer.bounds.insetBy(dx: 2, dy: 2)
         layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 15, cornerHeight: 15, transform: nil)
     }
 
@@ -753,7 +779,9 @@ final class TaskbarController: NSObject {
     }
 
     private func keepAliveFrame() -> NSRect {
-        panel.frame.insetBy(dx: -180, dy: -140)
+        let inset: CGFloat = isDraggingIcon ? -180 : -18
+        let verticalInset: CGFloat = isDraggingIcon ? -140 : -28
+        return panel.frame.insetBy(dx: inset, dy: verticalInset)
     }
 
     private func hide(animated: Bool) {
@@ -813,7 +841,8 @@ final class TaskbarController: NSObject {
         let title = titleFor(app)
         let icon = app.icon ?? NSImage(systemSymbolName: "app", accessibilityDescription: title)
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
-        let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isHidden: app.isHidden, attention: false, target: self, action: #selector(activateApp(_:)))
+        let badge = badgeText(for: app)
+        let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isHidden: app.isHidden, attention: false, badgeText: badge, target: self, action: #selector(activateApp(_:)))
         button.menu = appMenu(app)
         button.onDragStarted = { [weak self] in
             if let bundleID = app.bundleIdentifier {
@@ -990,6 +1019,14 @@ final class TaskbarController: NSObject {
             components.append("\(sample.cpu) \(sample.memory)")
         }
         return components.joined(separator: " ")
+    }
+
+    private func badgeText(for app: NSRunningApplication) -> String? {
+        let windowCount = appWindows[app.processIdentifier]?.count ?? 0
+        if windowCount > 1 {
+            return windowCount > 9 ? "9+" : "\(windowCount)"
+        }
+        return nil
     }
 
     private func shouldShow(app: NSRunningApplication) -> Bool {
