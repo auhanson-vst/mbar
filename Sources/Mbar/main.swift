@@ -15,6 +15,7 @@ enum Edge: String, CaseIterable {
 struct Settings {
     private enum Key {
         static let edge = "edge"
+        static let autoHide = "autoHide"
         static let mirror = "mirror"
         static let activityMode = "activityMode"
         static let rows = "rows"
@@ -30,6 +31,11 @@ struct Settings {
     static var edge: Edge {
         get { Edge(rawValue: UserDefaults.standard.string(forKey: Key.edge) ?? "") ?? .bottom }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.edge) }
+    }
+
+    static var autoHide: Bool {
+        get { UserDefaults.standard.object(forKey: Key.autoHide) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Key.autoHide) }
     }
 
     static var mirror: Bool {
@@ -961,7 +967,7 @@ final class ActivitySampler {
 }
 
 @MainActor
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private enum Pane: String, CaseIterable {
         case layout = "Layout"
         case items = "Items"
@@ -978,6 +984,7 @@ final class SettingsWindowController: NSWindowController {
     private let iconSizeValueLabel = NSTextField(labelWithString: "")
     private let itemSpacingSlider = NSSlider(value: 0, minValue: 0, maxValue: 32, target: nil, action: nil)
     private let itemSpacingValueLabel = NSTextField(labelWithString: "")
+    private let autoHideCheckbox = NSButton(checkboxWithTitle: "Automatically hide and show mbar", target: nil, action: nil)
     private let activityCheckbox = NSButton(checkboxWithTitle: "Show CPU and memory in app labels", target: nil, action: nil)
     private let accessibilityStatusLabel = NSTextField(labelWithString: "")
     private let showFinderCheckbox = NSButton(checkboxWithTitle: "Show Finder", target: nil, action: nil)
@@ -986,6 +993,7 @@ final class SettingsWindowController: NSWindowController {
     private let contentStack = NSStackView()
     private var paneButtons: [Pane: NSButton] = [:]
     private var selectedPane: Pane = .layout
+    var onClose: (() -> Void)?
 
     init() {
         let window = NSWindow(
@@ -998,6 +1006,7 @@ final class SettingsWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)
+        window.delegate = self
         buildContent()
         refreshControls()
     }
@@ -1011,6 +1020,10 @@ final class SettingsWindowController: NSWindowController {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose?()
     }
 
     private func buildContent() {
@@ -1180,14 +1193,16 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func behaviorSection() -> NSView {
+        autoHideCheckbox.target = self
+        autoHideCheckbox.action = #selector(autoHideChanged(_:))
         activityCheckbox.target = self
         activityCheckbox.action = #selector(activityModeChanged(_:))
         return section(
             title: "Behavior",
-            detail: "mbar currently auto-hides by design and keeps all displays mirrored.",
+            detail: "Control when mbar hides and how much app detail it shows.",
             rows: [
+                fullWidth(autoHideCheckbox),
                 fullWidth(activityCheckbox),
-                infoRow("Auto-hide", "Always on"),
                 infoRow("Display mode", "All apps on every display")
             ]
         )
@@ -1329,6 +1344,7 @@ final class SettingsWindowController: NSWindowController {
         iconSizeValueLabel.stringValue = "\(Int(Settings.iconSize)) px"
         itemSpacingSlider.doubleValue = Double(Settings.itemSpacing)
         itemSpacingValueLabel.stringValue = "\(Int(Settings.itemSpacing)) px"
+        autoHideCheckbox.state = Settings.autoHide ? .on : .off
         activityCheckbox.state = Settings.activityMode ? .on : .off
         showFinderCheckbox.state = Settings.showFinder ? .on : .off
         showApplicationsCheckbox.state = Settings.showApplications ? .on : .off
@@ -1365,6 +1381,12 @@ final class SettingsWindowController: NSWindowController {
         Settings.itemSpacing = CGFloat(sender.doubleValue)
         refreshControls()
         AppDelegate.shared?.rebuildBarsInPlace()
+    }
+
+    @objc private func autoHideChanged(_ sender: NSButton) {
+        Settings.autoHide = sender.state == .on
+        refreshControls()
+        AppDelegate.shared?.applyAutoHidePreference()
     }
 
     @objc private func activityModeChanged(_ sender: NSButton) {
@@ -1707,7 +1729,11 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     func show() {
         triggerPanel.orderFrontRegardless()
-        hide(animated: false)
+        if Settings.autoHide {
+            hide(animated: false)
+        } else {
+            reveal()
+        }
     }
 
     func rebuild() {
@@ -1890,13 +1916,16 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         }
     }
 
-    private func scheduleHide() {
+    func scheduleHide() {
         hideWorkItem?.cancel()
+        guard Settings.autoHide else { return }
         guard !isDraggingIcon, !isBarMenuOpen else { return }
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
+                guard Settings.autoHide else { return }
                 guard !self.isDraggingIcon, !self.isBarMenuOpen else { return }
+                guard AppDelegate.shared?.isSettingsVisible != true else { return }
                 let mouse = NSEvent.mouseLocation
                 if self.keepAliveFrame().contains(mouse)
                     || self.triggerPanel.frame.contains(mouse)
@@ -1930,6 +1959,10 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func hide(animated: Bool) {
         hideWorkItem?.cancel()
+        guard Settings.autoHide else {
+            reveal()
+            return
+        }
         isRevealed = false
         applicationGridPanel.orderOut(nil)
         hideWindowTitlePanel()
@@ -1955,7 +1988,9 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     func hideForExternalInteraction(at screenPoint: NSPoint? = nil) {
+        guard Settings.autoHide else { return }
         guard !isDraggingIcon, !isBarMenuOpen else { return }
+        guard AppDelegate.shared?.isSettingsVisible != true else { return }
         guard screenPoint != nil || !applicationGridPanel.isVisible else { return }
         if let screenPoint,
            keepAliveFrame().contains(screenPoint)
@@ -2652,11 +2687,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var globalEventMonitor: Any?
     private var localEventMonitor: Any?
 
+    var isSettingsVisible: Bool {
+        settingsWindowController.window?.isVisible == true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
         NSApp.setActivationPolicy(.accessory)
         AccessibilityWindowCatalog.requestTrustIfNeeded()
         applicationCatalog.refreshIfNeeded(force: true)
+        settingsWindowController.onClose = { [weak self] in
+            guard Settings.autoHide else { return }
+            self?.controllers.forEach { $0.scheduleHide() }
+        }
         rebuildBars()
 
         let center = NSWorkspace.shared.notificationCenter
@@ -2706,6 +2749,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showSettings() {
         settingsWindowController.showAndRefresh()
+        controllers.forEach { $0.reveal() }
+    }
+
+    func applyAutoHidePreference() {
+        if Settings.autoHide {
+            controllers.forEach { $0.scheduleHide() }
+        } else {
+            controllers.forEach { $0.reveal() }
+        }
     }
 
     @objc private func workspaceChanged(_ notification: Notification) {
