@@ -1362,25 +1362,25 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func rowsChanged(_ sender: NSStepper) {
         Settings.rows = sender.integerValue
         refreshControls()
-        AppDelegate.shared?.rebuildBars()
+        AppDelegate.shared?.refreshBarLayout()
     }
 
     @objc private func barSizeChanged(_ sender: NSSlider) {
         Settings.barSize = CGFloat(sender.doubleValue)
         refreshControls()
-        AppDelegate.shared?.rebuildBars()
+        AppDelegate.shared?.refreshBarLayout()
     }
 
     @objc private func iconSizeChanged(_ sender: NSSlider) {
         Settings.iconSize = CGFloat(sender.doubleValue)
         refreshControls()
-        AppDelegate.shared?.rebuildBarsInPlace()
+        AppDelegate.shared?.refreshBarLayout()
     }
 
     @objc private func itemSpacingChanged(_ sender: NSSlider) {
         Settings.itemSpacing = CGFloat(sender.doubleValue)
         refreshControls()
-        AppDelegate.shared?.rebuildBarsInPlace()
+        AppDelegate.shared?.refreshBarLayout()
     }
 
     @objc private func autoHideChanged(_ sender: NSButton) {
@@ -1807,6 +1807,18 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             panel.orderFrontRegardless()
             panel.alphaValue = 1
             isRevealed = true
+        }
+    }
+
+    func refreshLayout(preserveVisibility: Bool = true) {
+        let wasVisible = panel.isVisible || isRevealed
+        panel.setFrame(wasVisible || !Settings.autoHide ? Self.frame(for: screen) : Self.hiddenFrame(for: screen), display: true, animate: false)
+        triggerPanel.setFrame(Self.triggerFrame(for: screen), display: true, animate: false)
+        stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
+        stackView.spacing = Settings.itemSpacing
+        rebuild()
+        if !Settings.autoHide || (preserveVisibility && wasVisible) {
+            reveal()
         }
     }
 
@@ -2745,6 +2757,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func rebuildBarsInPlace() {
         controllers.forEach { $0.rebuild() }
+    }
+
+    func refreshBarLayout() {
+        controllers.forEach { $0.refreshLayout() }
     }
 
     func showSettings() {
