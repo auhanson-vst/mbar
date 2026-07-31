@@ -160,10 +160,22 @@ final class ActivitySampler {
 final class TaskbarItemView: NSButton {
     let representedBundleID: String?
     let representedPID: pid_t?
+    private let normalBackground: CGColor
+    private let hoverBackground: CGColor
+    private let pressedBackground: CGColor
 
     init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isHidden: Bool = false, attention: Bool = false, target: AnyObject?, action: Selector?) {
         self.representedBundleID = bundleID
         self.representedPID = pid
+        let baseColor: NSColor = {
+            if attention { return .systemRed.withAlphaComponent(0.28) }
+            if isActive { return .controlAccentColor.withAlphaComponent(0.22) }
+            if isHidden { return .white.withAlphaComponent(0.05) }
+            return .white.withAlphaComponent(0.11)
+        }()
+        self.normalBackground = baseColor.cgColor
+        self.hoverBackground = baseColor.blended(withFraction: 0.35, of: .white)?.cgColor ?? NSColor.white.withAlphaComponent(0.2).cgColor
+        self.pressedBackground = NSColor.controlAccentColor.withAlphaComponent(0.34).cgColor
         super.init(frame: .zero)
         self.title = ""
         self.image = image
@@ -180,17 +192,47 @@ final class TaskbarItemView: NSButton {
         layer?.cornerCurve = .continuous
         layer?.borderWidth = isActive ? 1 : 0
         layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.75).cgColor
-        layer?.backgroundColor = {
-            if attention { return NSColor.systemRed.withAlphaComponent(0.28).cgColor }
-            if isActive { return NSColor.controlAccentColor.withAlphaComponent(0.22).cgColor }
-            if isHidden { return NSColor.white.withAlphaComponent(0.05).cgColor }
-            return NSColor.white.withAlphaComponent(0.11).cgColor
-        }()
+        layer?.backgroundColor = normalBackground
         contentTintColor = isHidden ? .tertiaryLabelColor : nil
     }
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        animateTile(background: hoverBackground, scale: 1.08)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        animateTile(background: normalBackground, scale: 1.0)
+    }
+
+    override var isHighlighted: Bool {
+        didSet {
+            layer?.backgroundColor = isHighlighted ? pressedBackground : normalBackground
+        }
+    }
+
+    private func animateTile(background: CGColor, scale: CGFloat) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().layer?.backgroundColor = background
+            animator().layer?.transform = CATransform3DMakeScale(scale, scale, 1)
+        }
     }
 }
 
@@ -301,6 +343,7 @@ final class TaskbarController: NSObject {
         }
 
         addStartButton()
+        addFlexibleSpacer()
 
         let pinnedIDs = Settings.pinnedBundleIDs
         for bundleID in pinnedIDs {
@@ -311,6 +354,9 @@ final class TaskbarController: NSObject {
             guard shouldShow(app: app), app.bundleIdentifier.map({ !pinnedIDs.contains($0) }) ?? true else { continue }
             addAppItem(app)
         }
+
+        addSeparator()
+        addTrashButton()
     }
 
     private func buildChrome() {
@@ -419,6 +465,19 @@ final class TaskbarController: NSObject {
         stackView.addArrangedSubview(button)
     }
 
+    private func addFlexibleSpacer() {
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+        if Settings.edge == .left || Settings.edge == .right {
+            spacer.heightAnchor.constraint(greaterThanOrEqualToConstant: 12).isActive = true
+        } else {
+            spacer.widthAnchor.constraint(greaterThanOrEqualToConstant: 12).isActive = true
+        }
+        stackView.addArrangedSubview(spacer)
+    }
+
     private func addPinnedItem(bundleID: String) {
         if let app = runningApps[bundleID] {
             addAppItem(app)
@@ -442,6 +501,29 @@ final class TaskbarController: NSObject {
         let attention = app.isHidden == false && app.isActive == false && appWindows[app.processIdentifier]?.isEmpty == false
         let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isHidden: app.isHidden, attention: attention, target: self, action: #selector(activateApp(_:)))
         button.menu = appMenu(app)
+        constrain(button)
+        stackView.addArrangedSubview(button)
+    }
+
+    private func addSeparator() {
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        if Settings.edge == .left || Settings.edge == .right {
+            separator.widthAnchor.constraint(equalToConstant: Settings.barSize - 20).isActive = true
+        } else {
+            separator.heightAnchor.constraint(equalToConstant: Settings.barSize - 20).isActive = true
+        }
+        stackView.addArrangedSubview(separator)
+    }
+
+    private func addTrashButton() {
+        let image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Trash")
+        image?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
+        let button = TaskbarItemView(title: "Trash", image: image, bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openTrashButton(_:)))
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Open Trash", action: #selector(menuOpenTrash(_:)), keyEquivalent: "")
+        button.menu = menu
         constrain(button)
         stackView.addArrangedSubview(button)
     }
@@ -500,6 +582,10 @@ final class TaskbarController: NSObject {
 
     @objc private func openStartMenu(_ sender: NSButton) {
         sender.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
+    }
+
+    @objc private func openTrashButton(_ sender: NSButton) {
+        openTrash()
     }
 
     private func appMenu(_ app: NSRunningApplication) -> NSMenu {
@@ -625,6 +711,10 @@ final class TaskbarController: NSObject {
     }
 
     @objc private func menuOpenTrash(_ sender: NSMenuItem) {
+        openTrash()
+    }
+
+    private func openTrash() {
         NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".Trash"))
     }
 
