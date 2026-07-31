@@ -750,7 +750,7 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
         self.representedBundleID = bundleID
         self.representedPID = pid
         self.displayTitle = title
-        self.showsActiveIndicator = isActive || pid != nil
+        self.showsActiveIndicator = isActive
         self.badgeText = badgeText
         super.init(frame: .zero)
         self.title = ""
