@@ -339,7 +339,7 @@ final class WindowTitlePanel: NSPanel {
         ])
     }
 
-    func show(titles: [String], relativeTo view: NSView) {
+    func show(titles: [String], relativeTo view: NSView, edge: Edge) {
         guard let window = view.window else { return }
         stackView.arrangedSubviews.forEach {
             stackView.removeArrangedSubview($0)
@@ -361,10 +361,20 @@ final class WindowTitlePanel: NSPanel {
         let size = NSSize(width: width, height: height)
         setContentSize(size)
 
-        let localPoint = NSPoint(x: view.bounds.midX, y: view.bounds.maxY + 12)
-        let screenPoint = window.convertPoint(toScreen: view.convert(localPoint, to: nil))
-        let finalOrigin = NSPoint(x: screenPoint.x - size.width / 2, y: screenPoint.y)
-        setFrameOrigin(NSPoint(x: finalOrigin.x, y: finalOrigin.y - 8))
+        let iconRect = window.convertToScreen(view.convert(view.bounds, to: nil))
+        let finalOrigin: NSPoint
+        switch edge {
+        case .top:
+            finalOrigin = NSPoint(x: iconRect.midX - size.width / 2, y: iconRect.minY - size.height - 12)
+        case .left:
+            finalOrigin = NSPoint(x: iconRect.maxX + 12, y: iconRect.midY - size.height / 2)
+        case .right:
+            finalOrigin = NSPoint(x: iconRect.minX - size.width - 12, y: iconRect.midY - size.height / 2)
+        case .bottom:
+            finalOrigin = NSPoint(x: iconRect.midX - size.width / 2, y: iconRect.maxY + 12)
+        }
+        let startOrigin = NSPoint(x: finalOrigin.x, y: finalOrigin.y - (edge == .bottom ? 8 : 0))
+        setFrameOrigin(startOrigin)
         alphaValue = 0
         orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
@@ -1025,7 +1035,7 @@ final class TaskbarController: NSObject {
         let item = DispatchWorkItem { [weak self, weak button, weak app] in
             Task { @MainActor in
                 guard let self, let button, let app, button.window != nil else { return }
-                self.windowTitlePanel.show(titles: self.windowTitles(for: app), relativeTo: button)
+                self.windowTitlePanel.show(titles: self.windowTitles(for: app), relativeTo: button, edge: Settings.edge)
             }
         }
         hoverWindowWorkItem = item
@@ -1295,11 +1305,15 @@ final class TaskbarController: NSObject {
     }
 
     private func windowTitles(for app: NSRunningApplication) -> [String] {
-        let cgTitles = (appWindows[app.processIdentifier] ?? [])
-            .map(\.title)
-            .filter { title in
-                title != "Window" && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let appName = app.localizedName ?? "Window"
+        let cgWindows = appWindows[app.processIdentifier] ?? []
+        let cgTitles = cgWindows.enumerated().map { index, window in
+            let trimmed = window.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed == "Window" {
+                return cgWindows.count == 1 ? appName : "\(appName) Window \(index + 1)"
             }
+            return trimmed
+        }
         let axTitles = AccessibilityWindowCatalog.windowTitles(for: app.processIdentifier)
         let titles = cgTitles + axTitles
         return Array(NSOrderedSet(array: titles)) as? [String] ?? titles
