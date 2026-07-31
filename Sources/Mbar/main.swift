@@ -835,7 +835,16 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     override func layout() {
         super.layout()
         let width: CGFloat = showsActiveIndicator ? 18 : 0
-        activeIndicator.frame = CGRect(x: (bounds.width - width) / 2, y: 4, width: width, height: 4)
+        switch Settings.edge {
+        case .bottom:
+            activeIndicator.frame = CGRect(x: (bounds.width - width) / 2, y: 2, width: width, height: 4)
+        case .top:
+            activeIndicator.frame = CGRect(x: (bounds.width - width) / 2, y: bounds.maxY - 6, width: width, height: 4)
+        case .left:
+            activeIndicator.frame = CGRect(x: 2, y: (bounds.height - width) / 2, width: 4, height: width)
+        case .right:
+            activeIndicator.frame = CGRect(x: bounds.maxX - 6, y: (bounds.height - width) / 2, width: 4, height: width)
+        }
         let badgeWidth: CGFloat = badgeText.map { $0.count > 1 ? 24 : 18 } ?? 18
         let badgeY = isFlipped ? 3 : bounds.maxY - 15
         badgeView.frame = CGRect(x: bounds.maxX - badgeWidth - 3, y: badgeY, width: badgeWidth, height: 18)
