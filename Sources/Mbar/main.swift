@@ -2,6 +2,8 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 
+let appDragPasteboardType = NSPasteboard.PasteboardType("dev.auhanson.mbar.bundle-id")
+
 enum Edge: String, CaseIterable {
     case bottom
     case top
@@ -77,6 +79,7 @@ struct ProcessSample {
 final class HoverView: NSView {
     var onEnter: (() -> Void)?
     var onExit: (() -> Void)?
+    var onDropBundleID: ((String, CGPoint) -> Bool)?
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -94,6 +97,20 @@ final class HoverView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         onExit?()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        registerForDraggedTypes([appDragPasteboardType])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.string(forType: appDragPasteboardType) == nil ? [] : .move
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let bundleID = sender.draggingPasteboard.string(forType: appDragPasteboardType) else { return false }
+        return onDropBundleID?(bundleID, convert(sender.draggingLocation, from: nil)) ?? false
     }
 }
 
@@ -303,12 +320,13 @@ final class ActivitySampler {
 }
 
 @MainActor
-final class TaskbarItemView: NSButton {
+final class TaskbarItemView: NSButton, NSDraggingSource {
     let representedBundleID: String?
     let representedPID: pid_t?
     private let displayTitle: String
     private let activeIndicator = CALayer()
     private let showsActiveIndicator: Bool
+    var onDragFinished: ((String, Bool) -> Void)?
 
     init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isHidden: Bool = false, attention: Bool = false, target: AnyObject?, action: Selector?) {
         self.representedBundleID = bundleID
@@ -388,6 +406,32 @@ final class TaskbarItemView: NSButton {
             animator().layer?.transform = transform
             animator().layer?.shadowOpacity = shadowOpacity
         }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let representedBundleID else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let pasteboardItem = NSPasteboardItem()
+        pasteboardItem.setString(representedBundleID, forType: appDragPasteboardType)
+        let item = NSDraggingItem(pasteboardWriter: pasteboardItem)
+        let image = image ?? NSImage(size: NSSize(width: 48, height: 48))
+        let dragFrame = bounds.insetBy(dx: 8, dy: 8)
+        item.setDraggingFrame(dragFrame, contents: image)
+
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        .move
+    }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        guard let representedBundleID else { return }
+        let droppedInsideBar = window?.frame.contains(screenPoint) ?? false
+        onDragFinished?(representedBundleID, droppedInsideBar)
     }
 }
 
@@ -551,6 +595,9 @@ final class TaskbarController: NSObject {
 
         hoverView.onEnter = { [weak self] in self?.reveal() }
         hoverView.onExit = { [weak self] in self?.scheduleHide() }
+        hoverView.onDropBundleID = { [weak self] bundleID, point in
+            self?.drop(bundleID: bundleID, at: point) ?? false
+        }
         hoverView.translatesAutoresizingMaskIntoConstraints = false
         hoverView.wantsLayer = true
         hoverView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -654,6 +701,9 @@ final class TaskbarController: NSObject {
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
         let button = TaskbarItemView(title: title, image: icon, bundleID: bundleID, pid: nil, isActive: false, target: self, action: #selector(launchPinned(_:)))
         button.menu = pinnedMenu(bundleID: bundleID)
+        button.onDragFinished = { [weak self] bundleID, droppedInsideBar in
+            self?.dragFinished(bundleID: bundleID, droppedInsideBar: droppedInsideBar)
+        }
         constrain(button)
         stackView.addArrangedSubview(button)
     }
@@ -664,8 +714,42 @@ final class TaskbarController: NSObject {
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
         let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isHidden: app.isHidden, attention: false, target: self, action: #selector(activateApp(_:)))
         button.menu = appMenu(app)
+        button.onDragFinished = { [weak self] bundleID, droppedInsideBar in
+            self?.dragFinished(bundleID: bundleID, droppedInsideBar: droppedInsideBar)
+        }
         constrain(button)
         stackView.addArrangedSubview(button)
+    }
+
+    private func drop(bundleID: String, at point: CGPoint) -> Bool {
+        guard runningApps[bundleID] != nil || NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil else {
+            return false
+        }
+
+        var pins = Settings.pinnedBundleIDs.filter { $0 != bundleID }
+        let insertionIndex = pinnedInsertionIndex(forDropX: point.x, excluding: bundleID, currentPins: pins)
+        pins.insert(bundleID, at: min(insertionIndex, pins.count))
+        Settings.pinnedBundleIDs = pins
+        AppDelegate.shared?.rebuildBars()
+        return true
+    }
+
+    private func pinnedInsertionIndex(forDropX dropX: CGFloat, excluding bundleID: String, currentPins: [String]) -> Int {
+        var index = 0
+        for view in stackView.arrangedSubviews {
+            guard let item = view as? TaskbarItemView, let itemBundleID = item.representedBundleID else { continue }
+            if itemBundleID == bundleID { continue }
+            if currentPins.contains(itemBundleID), dropX > item.frame.midX {
+                index += 1
+            }
+        }
+        return index
+    }
+
+    private func dragFinished(bundleID: String, droppedInsideBar: Bool) {
+        guard !droppedInsideBar, Settings.pinnedBundleIDs.contains(bundleID) else { return }
+        Settings.pinnedBundleIDs.removeAll { $0 == bundleID }
+        AppDelegate.shared?.rebuildBars()
     }
 
     private func addSeparator() {

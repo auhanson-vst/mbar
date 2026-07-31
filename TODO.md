@@ -27,6 +27,8 @@
 - [x] Removed heavy hover label panel in favor of native tooltips.
 - [x] Faster reveal/hide and hover animation timing.
 - [x] Applications tile opens a compact icon grid instead of a text menu.
+- [x] Drag app icons within the bar to reorder/pin them.
+- [x] Drag pinned app icons out of the bar to unpin them.
 - [x] Start menu with Applications, Desktop, Trash, system actions, and quit.
 - [x] Window-title submenu for each app.
 - [x] Attention indicator for apps requesting attention.
