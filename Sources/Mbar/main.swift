@@ -1243,7 +1243,7 @@ final class TaskbarPanel: NSPanel {
 }
 
 @MainActor
-final class TaskbarController: NSObject {
+final class TaskbarController: NSObject, NSMenuDelegate {
     let screen: NSScreen
     let panel: TaskbarPanel
     let triggerPanel: TaskbarPanel
@@ -1260,6 +1260,7 @@ final class TaskbarController: NSObject {
     private var hideWorkItem: DispatchWorkItem?
     private var isRevealed = false
     private var isDraggingIcon = false
+    private var isBarMenuOpen = false
     private var draggedBundleID: String?
     private var liveDropIndex: Int?
     private var insertionMarker: NSView?
@@ -1497,11 +1498,11 @@ final class TaskbarController: NSObject {
 
     private func scheduleHide() {
         hideWorkItem?.cancel()
-        guard !isDraggingIcon else { return }
+        guard !isDraggingIcon, !isBarMenuOpen else { return }
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                guard !self.isDraggingIcon else { return }
+                guard !self.isDraggingIcon, !self.isBarMenuOpen else { return }
                 let mouse = NSEvent.mouseLocation
                 if self.keepAliveFrame().contains(mouse) || self.triggerPanel.frame.contains(mouse) || self.windowTitleKeepAliveFrame().contains(mouse) {
                     self.scheduleHide()
@@ -1552,7 +1553,7 @@ final class TaskbarController: NSObject {
     }
 
     func hideForExternalInteraction(at screenPoint: NSPoint? = nil) {
-        guard !isDraggingIcon else { return }
+        guard !isDraggingIcon, !isBarMenuOpen else { return }
         if let screenPoint,
            keepAliveFrame().contains(screenPoint)
             || applicationGridPanel.frame.contains(screenPoint)
@@ -2048,8 +2049,13 @@ final class TaskbarController: NSObject {
     }
 
     private func barContextMenu() -> NSMenu {
+        isBarMenuOpen = true
+        hideWorkItem?.cancel()
+        reveal()
+
         let menu = NSMenu()
         menu.autoenablesItems = false
+        menu.delegate = self
 
         let settingsItem = NSMenuItem(title: "mbar Settings…", action: #selector(menuOpenSettings(_:)), keyEquivalent: ",")
         settingsItem.target = self
@@ -2098,6 +2104,12 @@ final class TaskbarController: NSObject {
         quitItem.isEnabled = true
         menu.addItem(quitItem)
         return menu
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard isBarMenuOpen else { return }
+        isBarMenuOpen = false
+        scheduleHide()
     }
 
     private func applicationURLs() -> [URL] {
