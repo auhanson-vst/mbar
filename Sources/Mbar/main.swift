@@ -268,6 +268,7 @@ final class ApplicationGridContentView: NSVisualEffectView {
 @MainActor
 final class ApplicationGridPanel: NSPanel {
     private let grid = NSGridView()
+    private let scrollView = NSScrollView()
     private var openURL: ((URL) -> Void)?
     var onEnter: (() -> Void)?
     var onExit: (() -> Void)?
@@ -301,26 +302,25 @@ final class ApplicationGridPanel: NSPanel {
         effect.onEnter = { [weak self] in self?.onEnter?() }
         effect.onExit = { [weak self] in self?.onExit?() }
 
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
-        scroll.contentView.drawsBackground = false
-        scroll.borderType = .noBorder
-        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+        scrollView.contentView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
 
         grid.rowSpacing = 8
         grid.columnSpacing = 8
         grid.translatesAutoresizingMaskIntoConstraints = false
-        scroll.documentView = grid
+        scrollView.documentView = grid
 
-        effect.addSubview(scroll)
+        effect.addSubview(scrollView)
         contentView = effect
         NSLayoutConstraint.activate([
-            scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 12),
-            scroll.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -12),
-            scroll.topAnchor.constraint(equalTo: effect.topAnchor, constant: 12),
-            scroll.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -12),
-            grid.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
+            scrollView.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 12),
+            scrollView.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -12),
+            scrollView.topAnchor.constraint(equalTo: effect.topAnchor, constant: 12),
+            scrollView.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -12),
+            grid.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor)
         ])
     }
 
@@ -364,11 +364,19 @@ final class ApplicationGridPanel: NSPanel {
         let iconRect = window.convertToScreen(view.convert(view.bounds, to: nil))
         setFrameOrigin(NSPoint(x: iconRect.midX - size.width / 2, y: iconRect.maxY + 12))
         orderFrontRegardless()
+        resetScrollToTop()
     }
 
     @objc private func openApp(_ sender: ApplicationButton) {
         openURL?(sender.url)
         orderOut(nil)
+    }
+
+    private func resetScrollToTop() {
+        grid.layoutSubtreeIfNeeded()
+        let maxY = max(0, grid.bounds.height - scrollView.contentView.bounds.height)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: maxY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 }
 
@@ -755,6 +763,58 @@ final class DockBadgeCatalog {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
         return value
+    }
+}
+
+final class ApplicationCatalog {
+    private(set) var urls: [URL] = []
+    private var lastRefresh: Date?
+    private let refreshInterval: TimeInterval = 300
+
+    func refreshIfNeeded(force: Bool = false) {
+        if !force,
+           let lastRefresh,
+           Date().timeIntervalSince(lastRefresh) < refreshInterval,
+           !urls.isEmpty {
+            return
+        }
+        urls = Self.discoverApplications()
+        lastRefresh = Date()
+    }
+
+    private static func discoverApplications() -> [URL] {
+        let roots = [
+            URL(fileURLWithPath: "/Applications"),
+            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications"),
+            URL(fileURLWithPath: "/System/Applications"),
+            URL(fileURLWithPath: "/System/Applications/Utilities"),
+            URL(fileURLWithPath: "/Applications/Setapp")
+        ]
+        var urls: [URL] = []
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
+        for root in roots {
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+
+            for case let url as URL in enumerator {
+                if url.pathExtension == "app" {
+                    urls.append(url)
+                    enumerator.skipDescendants()
+                    continue
+                }
+
+                if let values = try? url.resourceValues(forKeys: Set(keys)),
+                   values.isPackage == true {
+                    enumerator.skipDescendants()
+                }
+            }
+        }
+        return Array(Set(urls)).sorted {
+            $0.deletingPathExtension().lastPathComponent.localizedCaseInsensitiveCompare($1.deletingPathExtension().lastPathComponent) == .orderedAscending
+        }
     }
 }
 
@@ -2113,7 +2173,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openStartMenu(_ sender: NSButton) {
-        applicationGridPanel.show(apps: applicationURLs(), relativeTo: sender) { url in
+        applicationGridPanel.show(apps: AppDelegate.shared?.applicationURLs() ?? [], relativeTo: sender) { url in
             NSWorkspace.shared.open(url)
         }
     }
@@ -2250,7 +2310,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private func applicationsMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for url in applicationURLs() {
+        for url in AppDelegate.shared?.applicationURLs() ?? [] {
             let title = url.deletingPathExtension().lastPathComponent
             let icon = NSWorkspace.shared.icon(forFile: url.path)
             icon.size = NSSize(width: 22, height: 22)
@@ -2328,41 +2388,6 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         guard isBarMenuOpen else { return }
         isBarMenuOpen = false
         scheduleHide()
-    }
-
-    private func applicationURLs() -> [URL] {
-        let roots = [
-            URL(fileURLWithPath: "/Applications"),
-            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications"),
-            URL(fileURLWithPath: "/System/Applications"),
-            URL(fileURLWithPath: "/System/Applications/Utilities"),
-            URL(fileURLWithPath: "/Applications/Setapp")
-        ]
-        var urls: [URL] = []
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
-        for root in roots {
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: keys,
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-
-            for case let url as URL in enumerator {
-                if url.pathExtension == "app" {
-                    urls.append(url)
-                    enumerator.skipDescendants()
-                    continue
-                }
-
-                if let values = try? url.resourceValues(forKeys: Set(keys)),
-                   values.isPackage == true {
-                    enumerator.skipDescendants()
-                }
-            }
-        }
-        return Array(Set(urls)).sorted {
-            $0.deletingPathExtension().lastPathComponent.localizedCaseInsensitiveCompare($1.deletingPathExtension().lastPathComponent) == .orderedAscending
-        }
     }
 
     @objc private func menuActivate(_ sender: NSMenuItem) {
@@ -2495,7 +2520,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate?
     private var controllers: [TaskbarController] = []
     private let settingsWindowController = SettingsWindowController()
+    private let applicationCatalog = ApplicationCatalog()
     private var timer: Timer?
+    private var applicationCatalogTimer: Timer?
     private var globalEventMonitor: Any?
     private var localEventMonitor: Any?
 
@@ -2503,6 +2530,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Self.shared = self
         NSApp.setActivationPolicy(.accessory)
         AccessibilityWindowCatalog.requestTrustIfNeeded()
+        applicationCatalog.refreshIfNeeded(force: true)
         rebuildBars()
 
         let center = NSWorkspace.shared.notificationCenter
@@ -2518,8 +2546,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.controllers.forEach { $0.rebuild() }
             }
         }
+        applicationCatalogTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.applicationCatalog.refreshIfNeeded(force: true)
+            }
+        }
 
         installInteractionMonitors()
+    }
+
+    func applicationURLs() -> [URL] {
+        applicationCatalog.refreshIfNeeded()
+        return applicationCatalog.urls
     }
 
     func rebuildBars(preserveVisibility: Bool = false) {
