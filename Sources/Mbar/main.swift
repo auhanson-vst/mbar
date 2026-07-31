@@ -388,9 +388,9 @@ final class TaskbarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
         if let bundleID = app.bundleIdentifier, Settings.pinnedBundleIDs.contains(bundleID) {
-            menu.addItem(withTitle: "Unpin from AuhansonVST", action: #selector(menuUnpin(_:)), keyEquivalent: "").representedObject = bundleID
+            menu.addItem(withTitle: "Unpin from mbar", action: #selector(menuUnpin(_:)), keyEquivalent: "").representedObject = bundleID
         } else if let bundleID = app.bundleIdentifier {
-            menu.addItem(withTitle: "Pin to AuhansonVST", action: #selector(menuPin(_:)), keyEquivalent: "").representedObject = bundleID
+            menu.addItem(withTitle: "Pin to mbar", action: #selector(menuPin(_:)), keyEquivalent: "").representedObject = bundleID
         }
         menu.addItem(withTitle: "Quit", action: #selector(menuQuit(_:)), keyEquivalent: "").representedObject = app
         return menu
@@ -399,7 +399,7 @@ final class TaskbarController: NSObject {
     private func pinnedMenu(bundleID: String) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(withTitle: "Launch", action: #selector(menuLaunchPinned(_:)), keyEquivalent: "").representedObject = bundleID
-        menu.addItem(withTitle: "Unpin from AuhansonVST", action: #selector(menuUnpin(_:)), keyEquivalent: "").representedObject = bundleID
+        menu.addItem(withTitle: "Unpin from mbar", action: #selector(menuUnpin(_:)), keyEquivalent: "").representedObject = bundleID
         return menu
     }
 
@@ -439,7 +439,7 @@ final class TaskbarController: NSObject {
         menu.addItem(withTitle: "Restart…", action: #selector(menuRestart(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Shut Down…", action: #selector(menuShutdown(_:)), keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(withTitle: "Quit AuhansonVST", action: #selector(menuQuitApp(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit mbar", action: #selector(menuQuitApp(_:)), keyEquivalent: "q")
         return menu
     }
 

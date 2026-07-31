@@ -2,17 +2,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "auhanson-vst",
+    name: "mbar",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "AuhansonVST", targets: ["AuhansonVST"])
+        .executable(name: "mbar", targets: ["Mbar"])
     ],
     targets: [
         .executableTarget(
-            name: "AuhansonVST",
-            path: "Sources/AuhansonVST"
+            name: "Mbar",
+            path: "Sources/Mbar"
         )
     ]
 )

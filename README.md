@@ -1,12 +1,12 @@
-# AuhansonVST
+# mbar
 
-AuhansonVST is an independent macOS taskbar-style Dock alternative inspired by common taskbar workflows. It does not copy uBar code, assets, names, or private behavior.
+mbar is an independent macOS taskbar-style Dock alternative inspired by common taskbar workflows. It does not copy uBar code, assets, names, or private behavior.
 
 ## Public uBar feature inventory
 
 Public listings and reviews describe uBar as having these capabilities:
 
-| Feature | AuhansonVST status |
+| Feature | mbar status |
 | --- | --- |
 | Taskbar or Dock-style layout | Implemented as a taskbar panel |
 | Running apps and open windows | Implemented: running apps plus window-title submenu |
@@ -30,7 +30,7 @@ Public listings and reviews describe uBar as having these capabilities:
 
 ```bash
 swift build
-.build/debug/AuhansonVST
+.build/debug/mbar
 ```
 
 For best results, hide the native Dock:
