@@ -61,6 +61,6 @@
 - [ ] Volume control popover.
 - [ ] Richer app flashing/attention animations.
 - [ ] Preferences UI instead of menu-only controls.
-- [ ] Signed `.app` bundle packaging.
-- [ ] Launch agent for login startup.
+- [x] `.app` bundle packaging with stable bundle identifier.
+- [x] Launch agent for login startup.
 - [ ] Tests around window-to-screen assignment and settings persistence.

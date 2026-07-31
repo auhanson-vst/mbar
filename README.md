@@ -36,20 +36,18 @@ swift build
 
 ## Run at login with LaunchAgent
 
-Build and install a stable binary:
+Build and install a stable `.app` bundle:
 
 ```bash
-swift build -c release
-mkdir -p ~/.local/bin ~/Library/Logs/mbar
-install -m 755 .build/release/mbar ~/.local/bin/mbar
+scripts/install-launchagent.sh
 ```
 
-Install `~/Library/LaunchAgents/dev.auhanson.mbar.plist` pointing at `~/.local/bin/mbar`, then load it:
+This installs:
 
-```bash
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/dev.auhanson.mbar.plist
-launchctl kickstart -k "gui/$(id -u)/dev.auhanson.mbar"
-```
+- `~/Applications/mbar.app`
+- `~/Library/LaunchAgents/dev.auhanson.mbar.plist`
+
+The app bundle uses the stable bundle identifier `dev.auhanson.mbar`, which helps macOS keep Accessibility/TCC permissions across rebuilds.
 
 For best results, hide the native Dock:
 
