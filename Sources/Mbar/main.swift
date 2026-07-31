@@ -237,7 +237,21 @@ final class ApplicationButton: NSButton {
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        clearHover()
+    }
+
+    func clearHover() {
         layer?.backgroundColor = NSColor.clear.cgColor
+    }
+}
+
+@MainActor
+final class ApplicationGridScrollView: NSScrollView {
+    var onScroll: (() -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        onScroll?()
+        super.scrollWheel(with: event)
     }
 }
 
@@ -268,10 +282,15 @@ final class ApplicationGridContentView: NSVisualEffectView {
 @MainActor
 final class ApplicationGridPanel: NSPanel {
     private let grid = NSGridView()
-    private let scrollView = NSScrollView()
+    private let scrollView = ApplicationGridScrollView()
+    private let filterLabel = NSTextField(labelWithString: "Type to filter apps")
+    private var allApps: [URL] = []
+    private var filterText = ""
     private var openURL: ((URL) -> Void)?
     var onEnter: (() -> Void)?
     var onExit: (() -> Void)?
+
+    override var canBecomeKey: Bool { true }
 
     init() {
         super.init(
@@ -307,18 +326,27 @@ final class ApplicationGridPanel: NSPanel {
         scrollView.contentView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.onScroll = { [weak self] in self?.clearHoverState() }
+
+        filterLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        filterLabel.textColor = .secondaryLabelColor
+        filterLabel.translatesAutoresizingMaskIntoConstraints = false
 
         grid.rowSpacing = 8
         grid.columnSpacing = 8
         grid.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = grid
 
+        effect.addSubview(filterLabel)
         effect.addSubview(scrollView)
         contentView = effect
         NSLayoutConstraint.activate([
+            filterLabel.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 16),
+            filterLabel.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -16),
+            filterLabel.topAnchor.constraint(equalTo: effect.topAnchor, constant: 10),
             scrollView.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 12),
             scrollView.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -12),
-            scrollView.topAnchor.constraint(equalTo: effect.topAnchor, constant: 12),
+            scrollView.topAnchor.constraint(equalTo: filterLabel.bottomAnchor, constant: 8),
             scrollView.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -12),
             grid.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor)
         ])
@@ -326,10 +354,60 @@ final class ApplicationGridPanel: NSPanel {
 
     func show(apps: [URL], relativeTo view: NSView, openURL: @escaping (URL) -> Void) {
         self.openURL = openURL
+        self.allApps = apps
+        filterText = ""
+        rebuildGrid(resetScroll: true)
+        updateFilterLabel()
+        clearHoverState()
+
+        guard let window = view.window else { return }
+        let size = NSSize(width: 520, height: 360)
+        setContentSize(size)
+        let iconRect = window.convertToScreen(view.convert(view.bounds, to: nil))
+        setFrameOrigin(NSPoint(x: iconRect.midX - size.width / 2, y: iconRect.maxY + 12))
+        orderFrontRegardless()
+        makeKey()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 53:
+            if filterText.isEmpty {
+                orderOut(nil)
+            } else {
+                filterText = ""
+                updateFilter()
+            }
+        case 51, 117:
+            guard !filterText.isEmpty else { return }
+            filterText.removeLast()
+            updateFilter()
+        case 36:
+            if let firstApp = filteredApps().first {
+                openURL?(firstApp)
+                orderOut(nil)
+            }
+        default:
+            guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else { return }
+            let filteredCharacters = characters.filter { !$0.isNewline && $0 != "\t" && $0 != "\u{1B}" }
+            guard !filteredCharacters.isEmpty else { return }
+            filterText.append(contentsOf: filteredCharacters)
+            updateFilter()
+        }
+    }
+
+    private func updateFilter() {
+        rebuildGrid(resetScroll: true)
+        updateFilterLabel()
+        clearHoverState()
+    }
+
+    private func rebuildGrid(resetScroll: Bool) {
         grid.subviews.forEach { $0.removeFromSuperview() }
 
         let columns = 6
         var rows: [[NSView]] = []
+        let apps = filteredApps()
         for chunkStart in stride(from: 0, to: apps.count, by: columns) {
             let chunk = apps[chunkStart..<min(chunkStart + columns, apps.count)]
             rows.append(chunk.map { url in
@@ -357,19 +435,43 @@ final class ApplicationGridPanel: NSPanel {
             newGrid.topAnchor.constraint(equalTo: grid.topAnchor),
             newGrid.bottomAnchor.constraint(equalTo: grid.bottomAnchor)
         ])
-
-        guard let window = view.window else { return }
-        let size = NSSize(width: 520, height: 360)
-        setContentSize(size)
-        let iconRect = window.convertToScreen(view.convert(view.bounds, to: nil))
-        setFrameOrigin(NSPoint(x: iconRect.midX - size.width / 2, y: iconRect.maxY + 12))
-        orderFrontRegardless()
-        resetScrollToTop()
+        if resetScroll {
+            resetScrollToTop()
+        }
     }
 
     @objc private func openApp(_ sender: ApplicationButton) {
         openURL?(sender.url)
         orderOut(nil)
+    }
+
+    private func filteredApps() -> [URL] {
+        let query = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return allApps }
+        return allApps.filter {
+            $0.deletingPathExtension().lastPathComponent.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private func updateFilterLabel() {
+        filterLabel.stringValue = filterText.isEmpty ? "Type to filter apps" : "Filter: \(filterText)"
+    }
+
+    private func clearHoverState() {
+        for button in applicationButtons(in: grid) {
+            button.clearHover()
+        }
+    }
+
+    private func applicationButtons(in view: NSView) -> [ApplicationButton] {
+        var result: [ApplicationButton] = []
+        if let button = view as? ApplicationButton {
+            result.append(button)
+        }
+        for subview in view.subviews {
+            result.append(contentsOf: applicationButtons(in: subview))
+        }
+        return result
     }
 
     private func resetScrollToTop() {
@@ -1831,6 +1933,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     func hideForExternalInteraction(at screenPoint: NSPoint? = nil) {
         guard !isDraggingIcon, !isBarMenuOpen else { return }
+        guard screenPoint != nil || !applicationGridPanel.isVisible else { return }
         if let screenPoint,
            keepAliveFrame().contains(screenPoint)
             || applicationGridPanel.frame.contains(screenPoint)
