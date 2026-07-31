@@ -47,4 +47,4 @@ launchctl kickstart -k "gui/$(id -u)/com.apple.Dock.agent"
 
 Window control is intentionally limited to public macOS APIs unless Accessibility permission is granted. The app can list public window titles from CoreGraphics and activate apps through `NSWorkspace`.
 
-The default UX hides until the pointer touches the configured screen edge, then reveals a centered icon-only strip ordered as pinned/running apps, additional open apps, a separator, Applications, and Trash. Every display shows the same open-app set. The Applications tile opens a direct popup of installed apps with icons.
+The default UX hides until the pointer touches the configured screen edge, then reveals a single translucent Dock-style section containing a centered icon-only strip ordered as pinned/running apps, additional open apps, a separator, Applications, and Trash. Every display shows the same open-app set. The Applications tile opens a direct popup of installed apps with icons.

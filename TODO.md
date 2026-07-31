@@ -20,6 +20,7 @@
 - [x] Applications tile opens a direct app-icon popup.
 - [x] Every display shows all open applications, regardless of where their windows are.
 - [x] Refined tile aesthetics with hover scale, softer borders/shadows, active/open indicators, and invisible edge trigger.
+- [x] Single shared translucent Dock-style background instead of per-app tile backgrounds.
 - [x] Start menu with Applications, Desktop, Trash, system actions, and quit.
 - [x] Window-title submenu for each app.
 - [x] Attention indicator for apps requesting attention.

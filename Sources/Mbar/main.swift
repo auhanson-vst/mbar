@@ -160,9 +160,6 @@ final class ActivitySampler {
 final class TaskbarItemView: NSButton {
     let representedBundleID: String?
     let representedPID: pid_t?
-    private let normalBackground: CGColor
-    private let hoverBackground: CGColor
-    private let pressedBackground: CGColor
     private let activeIndicator = CALayer()
     private let showsActiveIndicator: Bool
 
@@ -170,15 +167,6 @@ final class TaskbarItemView: NSButton {
         self.representedBundleID = bundleID
         self.representedPID = pid
         self.showsActiveIndicator = isActive || pid != nil
-        let baseColor: NSColor = {
-            if attention { return .systemRed.withAlphaComponent(0.18) }
-            if isActive { return .controlAccentColor.withAlphaComponent(0.24) }
-            if isHidden { return .labelColor.withAlphaComponent(0.04) }
-            return .labelColor.withAlphaComponent(0.08)
-        }()
-        self.normalBackground = baseColor.cgColor
-        self.hoverBackground = baseColor.blended(withFraction: 0.18, of: .controlAccentColor)?.withAlphaComponent(0.28).cgColor ?? NSColor.controlAccentColor.withAlphaComponent(0.24).cgColor
-        self.pressedBackground = NSColor.controlAccentColor.withAlphaComponent(0.38).cgColor
         super.init(frame: .zero)
         self.title = ""
         self.image = image
@@ -193,13 +181,11 @@ final class TaskbarItemView: NSButton {
         wantsLayer = true
         layer?.cornerRadius = 15
         layer?.cornerCurve = .continuous
-        layer?.borderWidth = 0.75
-        layer?.borderColor = (isActive ? NSColor.controlAccentColor.withAlphaComponent(0.65) : NSColor.separatorColor.withAlphaComponent(0.28)).cgColor
-        layer?.backgroundColor = normalBackground
+        layer?.backgroundColor = NSColor.clear.cgColor
         layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.16
-        layer?.shadowRadius = 10
-        layer?.shadowOffset = NSSize(width: 0, height: 4)
+        layer?.shadowOpacity = 0
+        layer?.shadowRadius = 8
+        layer?.shadowOffset = NSSize(width: 0, height: 3)
         contentTintColor = isHidden ? .tertiaryLabelColor : nil
 
         activeIndicator.backgroundColor = (isActive ? NSColor.controlAccentColor : NSColor.secondaryLabelColor.withAlphaComponent(0.72)).cgColor
@@ -224,17 +210,17 @@ final class TaskbarItemView: NSButton {
 
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
-        animateTile(background: hoverBackground, scale: 1.12, shadowOpacity: 0.26)
+        animateTile(scale: 1.18, yOffset: 4, shadowOpacity: 0.22)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        animateTile(background: normalBackground, scale: 1.0, shadowOpacity: 0.16)
+        animateTile(scale: 1.0, yOffset: 0, shadowOpacity: 0)
     }
 
     override var isHighlighted: Bool {
         didSet {
-            layer?.backgroundColor = isHighlighted ? pressedBackground : normalBackground
+            animateTile(scale: isHighlighted ? 0.94 : 1.0, yOffset: isHighlighted ? -1 : 0, shadowOpacity: isHighlighted ? 0.08 : 0)
         }
     }
 
@@ -245,12 +231,13 @@ final class TaskbarItemView: NSButton {
         layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 15, cornerHeight: 15, transform: nil)
     }
 
-    private func animateTile(background: CGColor, scale: CGFloat, shadowOpacity: Float) {
+    private func animateTile(scale: CGFloat, yOffset: CGFloat, shadowOpacity: Float) {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            animator().layer?.backgroundColor = background
-            animator().layer?.transform = CATransform3DMakeScale(scale, scale, 1)
+            var transform = CATransform3DMakeTranslation(0, yOffset, 0)
+            transform = CATransform3DScale(transform, scale, scale, 1)
+            animator().layer?.transform = transform
             animator().layer?.shadowOpacity = shadowOpacity
         }
     }
@@ -285,6 +272,7 @@ final class TaskbarController: NSObject {
     let stackView = NSStackView()
     private let hoverView = HoverView()
     private let triggerView = HoverView()
+    private let dockBackground = NSVisualEffectView()
     private var runningApps: [String: NSRunningApplication] = [:]
     private var appWindows: [pid_t: [WindowInfo]] = [:]
     private var activitySamples: [pid_t: ProcessSample] = [:]
@@ -383,11 +371,25 @@ final class TaskbarController: NSObject {
     }
 
     private func buildChrome() {
+        dockBackground.blendingMode = .behindWindow
+        dockBackground.material = .hudWindow
+        dockBackground.state = .active
+        dockBackground.translatesAutoresizingMaskIntoConstraints = false
+        dockBackground.wantsLayer = true
+        dockBackground.layer?.cornerRadius = 22
+        dockBackground.layer?.cornerCurve = .continuous
+        dockBackground.layer?.borderWidth = 0.75
+        dockBackground.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
+        dockBackground.layer?.shadowColor = NSColor.black.cgColor
+        dockBackground.layer?.shadowOpacity = 0.28
+        dockBackground.layer?.shadowRadius = 22
+        dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 8)
+
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         stackView.alignment = .centerY
         stackView.distribution = .gravityAreas
-        stackView.spacing = 10
-        stackView.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        stackView.spacing = 9
+        stackView.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         hoverView.onEnter = { [weak self] in self?.reveal() }
@@ -395,16 +397,21 @@ final class TaskbarController: NSObject {
         hoverView.translatesAutoresizingMaskIntoConstraints = false
         hoverView.wantsLayer = true
         hoverView.layer?.backgroundColor = NSColor.clear.cgColor
-        hoverView.addSubview(stackView)
+        hoverView.addSubview(dockBackground)
+        dockBackground.addSubview(stackView)
         panel.contentView = hoverView
 
         NSLayoutConstraint.activate([
-            stackView.centerXAnchor.constraint(equalTo: hoverView.centerXAnchor),
-            stackView.centerYAnchor.constraint(equalTo: hoverView.centerYAnchor),
-            stackView.leadingAnchor.constraint(greaterThanOrEqualTo: hoverView.leadingAnchor, constant: 10),
-            stackView.trailingAnchor.constraint(lessThanOrEqualTo: hoverView.trailingAnchor, constant: -10),
-            stackView.topAnchor.constraint(greaterThanOrEqualTo: hoverView.topAnchor, constant: 5),
-            stackView.bottomAnchor.constraint(lessThanOrEqualTo: hoverView.bottomAnchor, constant: -5)
+            dockBackground.centerXAnchor.constraint(equalTo: hoverView.centerXAnchor),
+            dockBackground.centerYAnchor.constraint(equalTo: hoverView.centerYAnchor),
+            dockBackground.leadingAnchor.constraint(greaterThanOrEqualTo: hoverView.leadingAnchor, constant: 10),
+            dockBackground.trailingAnchor.constraint(lessThanOrEqualTo: hoverView.trailingAnchor, constant: -10),
+            dockBackground.topAnchor.constraint(greaterThanOrEqualTo: hoverView.topAnchor, constant: 5),
+            dockBackground.bottomAnchor.constraint(lessThanOrEqualTo: hoverView.bottomAnchor, constant: -5),
+            stackView.leadingAnchor.constraint(equalTo: dockBackground.leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: dockBackground.trailingAnchor),
+            stackView.topAnchor.constraint(equalTo: dockBackground.topAnchor),
+            stackView.bottomAnchor.constraint(equalTo: dockBackground.bottomAnchor)
         ])
     }
 
