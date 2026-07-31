@@ -284,6 +284,8 @@ final class ApplicationGridPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
+        contentView?.wantsLayer = true
+        contentView?.layer?.backgroundColor = NSColor.clear.cgColor
 
         let effect = ApplicationGridContentView()
         effect.material = .hudWindow
@@ -292,6 +294,7 @@ final class ApplicationGridPanel: NSPanel {
         effect.wantsLayer = true
         effect.layer?.cornerRadius = 18
         effect.layer?.cornerCurve = .continuous
+        effect.layer?.masksToBounds = true
         effect.layer?.borderWidth = 0.75
         effect.layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
         effect.translatesAutoresizingMaskIntoConstraints = false
@@ -301,6 +304,7 @@ final class ApplicationGridPanel: NSPanel {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
+        scroll.contentView.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
@@ -326,7 +330,7 @@ final class ApplicationGridPanel: NSPanel {
 
         let columns = 6
         var rows: [[NSView]] = []
-        for chunkStart in stride(from: 0, to: min(apps.count, 120), by: columns) {
+        for chunkStart in stride(from: 0, to: apps.count, by: columns) {
             let chunk = apps[chunkStart..<min(chunkStart + columns, apps.count)]
             rows.append(chunk.map { url in
                 let button = ApplicationButton(url: url, target: self, action: #selector(openApp(_:)))
@@ -357,9 +361,8 @@ final class ApplicationGridPanel: NSPanel {
         guard let window = view.window else { return }
         let size = NSSize(width: 520, height: 360)
         setContentSize(size)
-        let localPoint = NSPoint(x: view.bounds.midX, y: view.bounds.maxY + 12)
-        let screenPoint = window.convertPoint(toScreen: view.convert(localPoint, to: nil))
-        setFrameOrigin(NSPoint(x: screenPoint.x - size.width / 2, y: screenPoint.y))
+        let iconRect = window.convertToScreen(view.convert(view.bounds, to: nil))
+        setFrameOrigin(NSPoint(x: iconRect.midX - size.width / 2, y: iconRect.maxY + 12))
         orderFrontRegardless()
     }
 
@@ -2247,7 +2250,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private func applicationsMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for url in applicationURLs().prefix(120) {
+        for url in applicationURLs() {
             let title = url.deletingPathExtension().lastPathComponent
             let icon = NSWorkspace.shared.icon(forFile: url.path)
             icon.size = NSSize(width: 22, height: 22)
@@ -2330,11 +2333,32 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private func applicationURLs() -> [URL] {
         let roots = [
             URL(fileURLWithPath: "/Applications"),
-            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications")
+            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications"),
+            URL(fileURLWithPath: "/System/Applications"),
+            URL(fileURLWithPath: "/System/Applications/Utilities"),
+            URL(fileURLWithPath: "/Applications/Setapp")
         ]
-        let urls = roots.flatMap { root in
-            ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
-                .filter { $0.pathExtension == "app" }
+        var urls: [URL] = []
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
+        for root in roots {
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+
+            for case let url as URL in enumerator {
+                if url.pathExtension == "app" {
+                    urls.append(url)
+                    enumerator.skipDescendants()
+                    continue
+                }
+
+                if let values = try? url.resourceValues(forKeys: Set(keys)),
+                   values.isPackage == true {
+                    enumerator.skipDescendants()
+                }
+            }
         }
         return Array(Set(urls)).sorted {
             $0.deletingPathExtension().lastPathComponent.localizedCaseInsensitiveCompare($1.deletingPathExtension().lastPathComponent) == .orderedAscending
