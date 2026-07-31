@@ -362,8 +362,8 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     let representedPID: pid_t?
     private let displayTitle: String
     private let activeIndicator = CALayer()
-    private let badgeLayer = CALayer()
-    private let badgeTextLayer = CATextLayer()
+    private let badgeView = NSView()
+    private let badgeLabel = NSTextField(labelWithString: "")
     private let showsActiveIndicator: Bool
     private let badgeText: String?
     private var mouseDownEvent: NSEvent?
@@ -402,24 +402,26 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
         activeIndicator.isHidden = !showsActiveIndicator
         layer?.addSublayer(activeIndicator)
 
-        badgeLayer.backgroundColor = NSColor.systemRed.cgColor
-        badgeLayer.borderColor = NSColor.windowBackgroundColor.cgColor
-        badgeLayer.borderWidth = 1.5
-        badgeLayer.cornerRadius = 9
-        badgeLayer.isHidden = badgeText == nil
-        badgeLayer.shadowColor = NSColor.black.cgColor
-        badgeLayer.shadowOpacity = 0.18
-        badgeLayer.shadowRadius = 4
-        badgeLayer.shadowOffset = NSSize(width: 0, height: 1)
+        badgeView.wantsLayer = true
+        badgeView.layer?.backgroundColor = NSColor.systemRed.cgColor
+        badgeView.layer?.borderColor = NSColor.windowBackgroundColor.cgColor
+        badgeView.layer?.borderWidth = 1.5
+        badgeView.layer?.cornerRadius = 9
+        badgeView.layer?.cornerCurve = .continuous
+        badgeView.layer?.shadowColor = NSColor.black.cgColor
+        badgeView.layer?.shadowOpacity = 0.18
+        badgeView.layer?.shadowRadius = 4
+        badgeView.layer?.shadowOffset = NSSize(width: 0, height: 1)
+        badgeView.isHidden = badgeText == nil
+        badgeView.translatesAutoresizingMaskIntoConstraints = false
 
-        badgeTextLayer.string = badgeText
-        badgeTextLayer.alignmentMode = .center
-        badgeTextLayer.font = NSFont.systemFont(ofSize: 10, weight: .bold)
-        badgeTextLayer.fontSize = 10
-        badgeTextLayer.foregroundColor = NSColor.white.cgColor
-        badgeTextLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-        badgeLayer.addSublayer(badgeTextLayer)
-        layer?.addSublayer(badgeLayer)
+        badgeLabel.stringValue = badgeText ?? ""
+        badgeLabel.font = .systemFont(ofSize: 10, weight: .bold)
+        badgeLabel.textColor = .white
+        badgeLabel.alignment = .center
+        badgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        badgeView.addSubview(badgeLabel)
+        addSubview(badgeView, positioned: .above, relativeTo: nil)
     }
 
     required init?(coder: NSCoder) {
@@ -458,8 +460,8 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
         activeIndicator.frame = CGRect(x: (bounds.width - width) / 2, y: 4, width: width, height: 4)
         let badgeWidth: CGFloat = badgeText.map { $0.count > 1 ? 24 : 18 } ?? 18
         let badgeY = isFlipped ? 3 : bounds.maxY - 15
-        badgeLayer.frame = CGRect(x: bounds.maxX - badgeWidth - 3, y: badgeY, width: badgeWidth, height: 18)
-        badgeTextLayer.frame = badgeLayer.bounds.insetBy(dx: 2, dy: 2)
+        badgeView.frame = CGRect(x: bounds.maxX - badgeWidth - 3, y: badgeY, width: badgeWidth, height: 18)
+        badgeLabel.frame = badgeView.bounds.insetBy(dx: 2, dy: 2)
         layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 15, cornerHeight: 15, transform: nil)
     }
 

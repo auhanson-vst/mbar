@@ -36,6 +36,7 @@
 - [x] Activity badge layer showing detectable multi-window app activity.
 - [x] Hide on typing or clicking outside mbar.
 - [x] Position badges at the top of icon tiles.
+- [x] Render badges above icons using overlay views.
 - [x] Start menu with Applications, Desktop, Trash, system actions, and quit.
 - [x] Window-title submenu for each app.
 - [x] Attention indicator for apps requesting attention.
