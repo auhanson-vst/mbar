@@ -1131,6 +1131,11 @@ final class TaskbarController: NSObject {
             menu.addItem(withTitle: "Pin to mbar", action: #selector(menuPin(_:)), keyEquivalent: "").representedObject = bundleID
         }
         menu.addItem(withTitle: "Quit", action: #selector(menuQuit(_:)), keyEquivalent: "").representedObject = app
+        let forceQuitItem = NSMenuItem(title: "Force Quit", action: #selector(menuForceQuit(_:)), keyEquivalent: "")
+        forceQuitItem.representedObject = app
+        forceQuitItem.isAlternate = true
+        forceQuitItem.keyEquivalentModifierMask = [.option]
+        menu.addItem(forceQuitItem)
         return menu
     }
 
@@ -1220,6 +1225,10 @@ final class TaskbarController: NSObject {
 
     @objc private func menuQuit(_ sender: NSMenuItem) {
         (sender.representedObject as? NSRunningApplication)?.terminate()
+    }
+
+    @objc private func menuForceQuit(_ sender: NSMenuItem) {
+        (sender.representedObject as? NSRunningApplication)?.forceTerminate()
     }
 
     @objc private func menuPin(_ sender: NSMenuItem) {
