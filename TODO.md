@@ -38,6 +38,8 @@
 - [x] Position badges at the top of icon tiles.
 - [x] Render badges above icons using overlay views.
 - [x] Dock-like slide-in/slide-out animation from the configured screen edge.
+- [x] Window title fallback via Accessibility APIs.
+- [x] Delayed animated window-title popover on app icon hover.
 - [x] Start menu with Applications, Desktop, Trash, system actions, and quit.
 - [x] Window-title submenu for each app.
 - [x] Attention indicator for apps requesting attention.

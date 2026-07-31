@@ -297,6 +297,98 @@ final class ApplicationGridPanel: NSPanel {
     }
 }
 
+@MainActor
+final class WindowTitlePanel: NSPanel {
+    private let stackView = NSStackView()
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 260, height: 120),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        level = .statusBar
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+
+        let effect = NSVisualEffectView()
+        effect.material = .hudWindow
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = 14
+        effect.layer?.cornerCurve = .continuous
+        effect.translatesAutoresizingMaskIntoConstraints = false
+
+        stackView.orientation = .vertical
+        stackView.alignment = .leading
+        stackView.spacing = 5
+        stackView.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+
+        effect.addSubview(stackView)
+        contentView = effect
+        NSLayoutConstraint.activate([
+            stackView.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
+            stackView.topAnchor.constraint(equalTo: effect.topAnchor),
+            stackView.bottomAnchor.constraint(equalTo: effect.bottomAnchor)
+        ])
+    }
+
+    func show(titles: [String], relativeTo view: NSView) {
+        guard let window = view.window else { return }
+        stackView.arrangedSubviews.forEach {
+            stackView.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+
+        let displayedTitles = titles.isEmpty ? ["No visible windows"] : Array(titles.prefix(8))
+        for title in displayedTitles {
+            let label = NSTextField(labelWithString: title)
+            label.font = .systemFont(ofSize: 12, weight: .medium)
+            label.textColor = .labelColor
+            label.lineBreakMode = .byTruncatingMiddle
+            label.maximumNumberOfLines = 1
+            stackView.addArrangedSubview(label)
+        }
+
+        let width = min(max(displayedTitles.map { CGFloat($0.count) * 7.0 }.max() ?? 140, 160), 360)
+        let height = CGFloat(displayedTitles.count) * 22 + 20
+        let size = NSSize(width: width, height: height)
+        setContentSize(size)
+
+        let localPoint = NSPoint(x: view.bounds.midX, y: view.bounds.maxY + 12)
+        let screenPoint = window.convertPoint(toScreen: view.convert(localPoint, to: nil))
+        let finalOrigin = NSPoint(x: screenPoint.x - size.width / 2, y: screenPoint.y)
+        setFrameOrigin(NSPoint(x: finalOrigin.x, y: finalOrigin.y - 8))
+        alphaValue = 0
+        orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().setFrameOrigin(finalOrigin)
+            animator().alphaValue = 1
+        }
+    }
+
+    func hideAnimated() {
+        guard isVisible else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.08
+            animator().alphaValue = 0
+        } completionHandler: {
+            Task { @MainActor in
+                self.orderOut(nil)
+                self.alphaValue = 1
+            }
+        }
+    }
+}
+
 final class WindowCatalog {
     static func visibleWindows() -> [WindowInfo] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
@@ -321,6 +413,30 @@ final class WindowCatalog {
             }
             let title = item[kCGWindowName as String] as? String ?? "Window"
             return WindowInfo(ownerPID: ownerPID, title: title.isEmpty ? "Window" : title, bounds: CGRect(x: x, y: y, width: width, height: height))
+        }
+    }
+}
+
+final class AccessibilityWindowCatalog {
+    static func windowTitles(for pid: pid_t) -> [String] {
+        guard AXIsProcessTrusted() else { return [] }
+        let app = AXUIElementCreateApplication(pid)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement]
+        else {
+            return []
+        }
+
+        return windows.compactMap { window in
+            var titleValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue) == .success,
+                  let title = titleValue as? String,
+                  !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return nil
+            }
+            return title
         }
     }
 }
@@ -369,6 +485,8 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     private var mouseDownEvent: NSEvent?
     var onDragStarted: (() -> Void)?
     var onDragFinished: ((String, Bool) -> Void)?
+    var onHoverStarted: ((TaskbarItemView) -> Void)?
+    var onHoverEnded: (() -> Void)?
 
     init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isHidden: Bool = false, attention: Bool = false, badgeText: String? = nil, target: AnyObject?, action: Selector?) {
         self.representedBundleID = bundleID
@@ -441,11 +559,13 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
         animateTile(scale: 1.04, yOffset: 1, shadowOpacity: 0.10)
+        onHoverStarted?(self)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         animateTile(scale: 1.0, yOffset: 0, shadowOpacity: 0)
+        onHoverEnded?()
     }
 
     override var isHighlighted: Bool {
@@ -562,6 +682,7 @@ final class TaskbarController: NSObject {
     private let triggerView = HoverView()
     private let dockBackground = DockBackgroundView()
     private let applicationGridPanel = ApplicationGridPanel()
+    private let windowTitlePanel = WindowTitlePanel()
     private var runningApps: [String: NSRunningApplication] = [:]
     private var appWindows: [pid_t: [WindowInfo]] = [:]
     private var activitySamples: [pid_t: ProcessSample] = [:]
@@ -571,6 +692,7 @@ final class TaskbarController: NSObject {
     private var draggedBundleID: String?
     private var liveDropIndex: Int?
     private var dragPlaceholder: NSView?
+    private var hoverWindowWorkItem: DispatchWorkItem?
 
     init(screen: NSScreen) {
         self.screen = screen
@@ -809,6 +931,7 @@ final class TaskbarController: NSObject {
         hideWorkItem?.cancel()
         isRevealed = false
         applicationGridPanel.orderOut(nil)
+        hideWindowTitlePanel()
         guard panel.isVisible else { return }
         if animated {
             NSAnimationContext.runAnimationGroup { context in
@@ -885,8 +1008,34 @@ final class TaskbarController: NSObject {
         button.onDragFinished = { [weak self] bundleID, droppedInsideBar in
             self?.dragFinished(bundleID: bundleID, droppedInsideBar: droppedInsideBar)
         }
+        button.onHoverStarted = { [weak self, weak app] button in
+            guard let app else { return }
+            self?.scheduleWindowTitlePanel(for: app, relativeTo: button)
+        }
+        button.onHoverEnded = { [weak self] in
+            self?.hideWindowTitlePanel()
+        }
         constrain(button)
         stackView.addArrangedSubview(button)
+    }
+
+    private func scheduleWindowTitlePanel(for app: NSRunningApplication, relativeTo button: TaskbarItemView) {
+        hoverWindowWorkItem?.cancel()
+        guard !isDraggingIcon else { return }
+        let item = DispatchWorkItem { [weak self, weak button, weak app] in
+            Task { @MainActor in
+                guard let self, let button, let app, button.window != nil else { return }
+                self.windowTitlePanel.show(titles: self.windowTitles(for: app), relativeTo: button)
+            }
+        }
+        hoverWindowWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: item)
+    }
+
+    private func hideWindowTitlePanel() {
+        hoverWindowWorkItem?.cancel()
+        hoverWindowWorkItem = nil
+        windowTitlePanel.hideAnimated()
     }
 
     private func startIconDrag(bundleID: String) {
@@ -1115,8 +1264,8 @@ final class TaskbarController: NSObject {
         let windowMenuItem = NSMenuItem(title: "Windows", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         submenu.autoenablesItems = false
-        for window in appWindows[app.processIdentifier] ?? [] {
-            let item = NSMenuItem(title: window.title, action: #selector(menuActivate(_:)), keyEquivalent: "")
+        for title in windowTitles(for: app) {
+            let item = NSMenuItem(title: title, action: #selector(menuActivate(_:)), keyEquivalent: "")
             item.representedObject = app
             item.target = self
             item.isEnabled = true
@@ -1143,6 +1292,17 @@ final class TaskbarController: NSObject {
         forceQuitItem.keyEquivalentModifierMask = [.option]
         menu.addItem(forceQuitItem)
         return menu
+    }
+
+    private func windowTitles(for app: NSRunningApplication) -> [String] {
+        let cgTitles = (appWindows[app.processIdentifier] ?? [])
+            .map(\.title)
+            .filter { title in
+                title != "Window" && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+        let axTitles = AccessibilityWindowCatalog.windowTitles(for: app.processIdentifier)
+        let titles = cgTitles + axTitles
+        return Array(NSOrderedSet(array: titles)) as? [String] ?? titles
     }
 
     private func addMenuItem(to menu: NSMenu, title: String, action: Selector, representedObject: Any) {
