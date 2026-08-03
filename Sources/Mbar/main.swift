@@ -1694,6 +1694,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private var acceptedDropBundleIDs = Set<String>()
     private var hoverWindowWorkItem: DispatchWorkItem?
     private var windowTitleHideWorkItem: DispatchWorkItem?
+    private var windowTitleSourceIconFrame: NSRect = .null
 
     init(screen: NSScreen) {
         self.screen = screen
@@ -1986,7 +1987,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func windowTitleKeepAliveFrame() -> NSRect {
         guard windowTitlePanel.isVisible else { return .null }
-        return windowTitlePanel.frame.insetBy(dx: -18, dy: -18).union(panel.frame.insetBy(dx: -24, dy: -32))
+        return windowTitlePanel.frame.insetBy(dx: -18, dy: -18).union(windowTitleSourceIconFrame.insetBy(dx: -12, dy: -12))
     }
 
     private func applicationGridKeepAliveFrame() -> NSRect {
@@ -2104,9 +2105,10 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         guard !isDraggingIcon else { return }
         let item = DispatchWorkItem { [weak self, weak button, weak app] in
             Task { @MainActor in
-                guard let self, self.isRevealed, let button, let app, button.window != nil else { return }
+                guard let self, self.isRevealed, let button, let app, let window = button.window else { return }
                 let items = self.windowListItems(for: app)
                 guard items.count > 1 else { return }
+                self.windowTitleSourceIconFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
                 self.windowTitlePanel.show(items: items, relativeTo: button, edge: Settings.edge)
             }
         }
@@ -2119,6 +2121,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         windowTitleHideWorkItem?.cancel()
         hoverWindowWorkItem = nil
         windowTitleHideWorkItem = nil
+        windowTitleSourceIconFrame = .null
         if animated {
             windowTitlePanel.hideAnimated()
         } else {
