@@ -12,9 +12,24 @@ enum Edge: String, CaseIterable {
     case right
 }
 
+enum BarTheme: String, CaseIterable {
+    case `default` = "default"
+    case macOSGlass = "macosGlass"
+
+    var displayName: String {
+        switch self {
+        case .default:
+            return "Default"
+        case .macOSGlass:
+            return "macOS Glass"
+        }
+    }
+}
+
 struct Settings {
     private enum Key {
         static let edge = "edge"
+        static let theme = "theme"
         static let autoHide = "autoHide"
         static let mirror = "mirror"
         static let activityMode = "activityMode"
@@ -31,6 +46,11 @@ struct Settings {
     static var edge: Edge {
         get { Edge(rawValue: UserDefaults.standard.string(forKey: Key.edge) ?? "") ?? .bottom }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.edge) }
+    }
+
+    static var theme: BarTheme {
+        get { BarTheme(rawValue: UserDefaults.standard.string(forKey: Key.theme) ?? "") ?? .default }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.theme) }
     }
 
     static var autoHide: Bool {
@@ -975,12 +995,14 @@ final class ActivitySampler {
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private enum Pane: String, CaseIterable {
         case layout = "Layout"
+        case appearance = "Appearance"
         case items = "Items"
         case behavior = "Behavior"
         case system = "System"
     }
 
     private let edgePopup = NSPopUpButton()
+    private let themePopup = NSPopUpButton()
     private let rowsStepper = NSStepper()
     private let rowsValueLabel = NSTextField(labelWithString: "")
     private let barSizeSlider = NSSlider(value: 0, minValue: 54, maxValue: 180, target: nil, action: nil)
@@ -1142,6 +1164,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         switch pane {
         case .layout:
             contentStack.addArrangedSubview(layoutSection())
+        case .appearance:
+            contentStack.addArrangedSubview(appearanceSection())
         case .items:
             contentStack.addArrangedSubview(itemsSection())
         case .behavior:
@@ -1155,6 +1179,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         switch pane {
         case .layout:
             return "Position, density, and sizing controls for the bar."
+        case .appearance:
+            return "Choose the visual style mbar uses for its background."
         case .items:
             return "Choose which built-in items mbar shows alongside your apps."
         case .behavior:
@@ -1193,6 +1219,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 row("Bar size", pair(barSizeSlider, barSizeValueLabel)),
                 row("Icon size", pair(iconSizeSlider, iconSizeValueLabel)),
                 row("Item spacing", pair(itemSpacingSlider, itemSpacingValueLabel))
+            ]
+        )
+    }
+
+    private func appearanceSection() -> NSView {
+        if themePopup.numberOfItems == 0 {
+            themePopup.addItems(withTitles: BarTheme.allCases.map(\.displayName))
+        }
+        themePopup.target = self
+        themePopup.action = #selector(themeChanged(_:))
+
+        return section(
+            title: "Theme",
+            detail: "Default keeps mbar's current compact HUD style. macOS Glass uses a brighter translucent material to feel closer to the native Dock.",
+            rows: [
+                row("Theme", themePopup)
             ]
         )
     }
@@ -1349,6 +1391,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         iconSizeValueLabel.stringValue = "\(Int(Settings.iconSize)) px"
         itemSpacingSlider.doubleValue = Double(Settings.itemSpacing)
         itemSpacingValueLabel.stringValue = "\(Int(Settings.itemSpacing)) px"
+        themePopup.selectItem(withTitle: Settings.theme.displayName)
         autoHideCheckbox.state = Settings.autoHide ? .on : .off
         activityCheckbox.state = Settings.activityMode ? .on : .off
         showFinderCheckbox.state = Settings.showFinder ? .on : .off
@@ -1362,6 +1405,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         guard let title = sender.selectedItem?.title.lowercased(), let edge = Edge(rawValue: title) else { return }
         Settings.edge = edge
         AppDelegate.shared?.rebuildBars()
+    }
+
+    @objc private func themeChanged(_ sender: NSPopUpButton) {
+        guard let index = BarTheme.allCases.firstIndex(where: { $0.displayName == sender.selectedItem?.title }) else { return }
+        Settings.theme = BarTheme.allCases[index]
+        refreshControls()
+        AppDelegate.shared?.refreshBarLayout()
     }
 
     @objc private func rowsChanged(_ sender: NSStepper) {
@@ -1839,6 +1889,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         let wasVisible = panel.isVisible || isRevealed
         panel.setFrame(wasVisible || !Settings.autoHide ? Self.frame(for: screen) : Self.hiddenFrame(for: screen), display: true, animate: false)
         triggerPanel.setFrame(Self.triggerFrame(for: screen), display: true, animate: false)
+        applyTheme()
         stackView.orientation = Settings.edge == .left || Settings.edge == .right ? .vertical : .horizontal
         stackView.spacing = Settings.itemSpacing
         rebuild()
@@ -1851,18 +1902,11 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func buildChrome() {
         dockBackground.blendingMode = .behindWindow
-        dockBackground.material = .hudWindow
         dockBackground.state = .active
         dockBackground.translatesAutoresizingMaskIntoConstraints = false
         dockBackground.wantsLayer = true
-        dockBackground.layer?.cornerRadius = 22
         dockBackground.layer?.cornerCurve = .continuous
-        dockBackground.layer?.borderWidth = 0.75
-        dockBackground.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
-        dockBackground.layer?.shadowColor = NSColor.black.cgColor
-        dockBackground.layer?.shadowOpacity = 0.28
-        dockBackground.layer?.shadowRadius = 22
-        dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 8)
+        applyTheme()
         dockBackground.onDropBundleID = { [weak self] bundleID, point in
             guard let self else { return false }
             return self.drop(bundleID: bundleID, at: self.hoverView.convert(point, from: self.dockBackground))
@@ -1940,6 +1984,32 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         triggerPanel.contentView = triggerView
         triggerPanel.hasShadow = false
         triggerPanel.alphaValue = 0.01
+    }
+
+    private func applyTheme() {
+        dockBackground.wantsLayer = true
+        dockBackground.layer?.shadowColor = NSColor.black.cgColor
+        dockBackground.layer?.cornerCurve = .continuous
+        switch Settings.theme {
+        case .default:
+            dockBackground.material = .hudWindow
+            dockBackground.layer?.cornerRadius = 22
+            dockBackground.layer?.borderWidth = 0.75
+            dockBackground.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
+            dockBackground.layer?.backgroundColor = NSColor.clear.cgColor
+            dockBackground.layer?.shadowOpacity = 0.28
+            dockBackground.layer?.shadowRadius = 22
+            dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 8)
+        case .macOSGlass:
+            dockBackground.material = .underWindowBackground
+            dockBackground.layer?.cornerRadius = 24
+            dockBackground.layer?.borderWidth = 0.5
+            dockBackground.layer?.borderColor = NSColor.white.withAlphaComponent(0.38).cgColor
+            dockBackground.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.10).cgColor
+            dockBackground.layer?.shadowOpacity = 0.34
+            dockBackground.layer?.shadowRadius = 28
+            dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 10)
+        }
     }
 
     func reveal() {

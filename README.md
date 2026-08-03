@@ -20,7 +20,7 @@ Public listings and reviews describe uBar as having these capabilities:
 | Badges and app attention flashes | Attention state implemented; notification badges planned |
 | Activity mode with CPU/RAM usage | Implemented via `ps` sampling |
 | Position on any screen edge | Implemented: top, bottom, left, right |
-| Adjustable rows/size/theme | Implemented: height, icon size, rows, dark/translucent style |
+| Adjustable rows/size/theme | Implemented: height, icon size, rows, item spacing, Default/macOS Glass themes |
 | Start/menu launcher | Implemented: Applications tile opens an icon popup of installed apps |
 | System actions | Implemented: sleep, restart, shutdown, lock |
 | Drag and drop | Planned |
@@ -73,13 +73,13 @@ Window control is intentionally limited to public macOS APIs unless Accessibilit
 
 The default UX hides until the pointer touches the configured screen edge, then quickly reveals a single translucent Dock-style section containing a centered icon-only strip ordered as pinned/running apps, additional open apps, a separator, native Applications folder icon, and native Trash icon. Every display shows the same deduplicated open-app set. The Applications tile opens a compact icon grid of installed apps.
 
-Right-click empty space on mbar to open a Dock-style context menu with settings, activity mode, position, system settings, and quit actions. The settings window uses a left sidebar with sections for layout, built-in items, behavior, and system helpers. It exposes live controls for position, rows, bar size, icon size, item spacing, auto-hide, Finder/Applications/Trash visibility, activity mode, Accessibility status, and native Dock helpers.
+Right-click empty space on mbar to open a Dock-style context menu with settings, activity mode, position, system settings, and quit actions. The settings window uses a left sidebar with sections for layout, appearance, built-in items, behavior, and system helpers. It exposes live controls for position, rows, bar size, icon size, item spacing, theme, auto-hide, Finder/Applications/Trash visibility, activity mode, Accessibility status, and native Dock helpers.
 
 Drag app icons within the bar to reorder/pin them. While dragging, mbar stays open and shows a stable insertion marker for the drop position. Drag a pinned app icon out of the expanded interaction area to unpin it.
 
 After dropping, mbar preserves the revealed state instead of immediately hiding.
 
-The normal hover keep-alive region is tight so the bar hides promptly. During drag, the keep-alive region expands substantially. App icons show Dock alert badges when macOS exposes them through Accessibility, with a visible-window-count fallback for apps with multiple windows.
+The normal hover keep-alive region is tight so the bar hides promptly. During drag, the keep-alive region expands substantially. App icons show Dock alert badges when macOS exposes them through Accessibility.
 
 mbar also hides when you type or click outside the bar/application grid.
 
