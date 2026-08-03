@@ -2319,11 +2319,6 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         if let bundleID = app.bundleIdentifier, let dockBadge = dockBadges[bundleID] {
             return dockBadge
         }
-
-        let windowCount = appWindows[app.processIdentifier]?.count ?? 0
-        if windowCount > 1 {
-            return windowCount > 9 ? "9+" : "\(windowCount)"
-        }
         return nil
     }
 
