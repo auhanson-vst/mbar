@@ -1695,6 +1695,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private var hoverWindowWorkItem: DispatchWorkItem?
     private var windowTitleHideWorkItem: DispatchWorkItem?
     private var windowTitleSourceIconFrame: NSRect = .null
+    private var isMouseInWindowTitlePanel = false
 
     init(screen: NSScreen) {
         self.screen = screen
@@ -1874,11 +1875,13 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             self?.barContextMenu() ?? NSMenu()
         }
         windowTitlePanel.onEnter = { [weak self] in
+            self?.isMouseInWindowTitlePanel = true
             self?.windowTitleHideWorkItem?.cancel()
             self?.hideWorkItem?.cancel()
             self?.reveal()
         }
         windowTitlePanel.onExit = { [weak self] in
+            self?.isMouseInWindowTitlePanel = false
             self?.scheduleWindowTitleHide()
             self?.scheduleHide()
         }
@@ -1987,7 +1990,9 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func windowTitleKeepAliveFrame() -> NSRect {
         guard windowTitlePanel.isVisible else { return .null }
-        return windowTitlePanel.frame.insetBy(dx: -18, dy: -18).union(windowTitleSourceIconFrame.insetBy(dx: -12, dy: -12))
+        let sourceFrame = windowTitleSourceIconFrame.insetBy(dx: -12, dy: -12)
+        guard isMouseInWindowTitlePanel else { return sourceFrame }
+        return windowTitlePanel.frame.insetBy(dx: -18, dy: -18).union(sourceFrame)
     }
 
     private func applicationGridKeepAliveFrame() -> NSRect {
@@ -2109,6 +2114,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
                 let items = self.windowListItems(for: app)
                 guard items.count > 1 else { return }
                 self.windowTitleSourceIconFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
+                self.isMouseInWindowTitlePanel = false
                 self.windowTitlePanel.show(items: items, relativeTo: button, edge: Settings.edge)
             }
         }
@@ -2122,6 +2128,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         hoverWindowWorkItem = nil
         windowTitleHideWorkItem = nil
         windowTitleSourceIconFrame = .null
+        isMouseInWindowTitlePanel = false
         if animated {
             windowTitlePanel.hideAnimated()
         } else {
