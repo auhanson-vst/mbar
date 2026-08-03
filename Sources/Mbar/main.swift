@@ -2294,23 +2294,33 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func addSeparator() {
+        let wrapper = NSView()
+        wrapper.translatesAutoresizingMaskIntoConstraints = false
+
         let separator = NSView()
         separator.wantsLayer = true
         separator.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
         separator.layer?.cornerRadius = 1
         separator.translatesAutoresizingMaskIntoConstraints = false
+        wrapper.addSubview(separator)
+
+        let margin = Settings.itemSpacing
         if Settings.edge == .left || Settings.edge == .right {
+            wrapper.widthAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
+            wrapper.heightAnchor.constraint(equalToConstant: 2 + margin * 2).isActive = true
             separator.widthAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
             separator.heightAnchor.constraint(equalToConstant: 2).isActive = true
+            separator.centerXAnchor.constraint(equalTo: wrapper.centerXAnchor).isActive = true
+            separator.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor).isActive = true
         } else {
+            wrapper.widthAnchor.constraint(equalToConstant: 2 + margin * 2).isActive = true
+            wrapper.heightAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
             separator.widthAnchor.constraint(equalToConstant: 2).isActive = true
             separator.heightAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
+            separator.centerXAnchor.constraint(equalTo: wrapper.centerXAnchor).isActive = true
+            separator.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor).isActive = true
         }
-        if let previous = stackView.arrangedSubviews.last {
-            stackView.setCustomSpacing(Settings.itemSpacing * 2, after: previous)
-        }
-        stackView.addArrangedSubview(separator)
-        stackView.setCustomSpacing(Settings.itemSpacing * 2, after: separator)
+        stackView.addArrangedSubview(wrapper)
     }
 
     private func addTrashButton() {
