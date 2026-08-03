@@ -2304,7 +2304,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         separator.translatesAutoresizingMaskIntoConstraints = false
         wrapper.addSubview(separator)
 
-        let margin = max(18, Settings.itemSpacing * 2)
+        let margin = max(14, Settings.itemSpacing * 2)
         if Settings.edge == .left || Settings.edge == .right {
             wrapper.widthAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
             wrapper.heightAnchor.constraint(equalToConstant: 2 + margin * 2).isActive = true
