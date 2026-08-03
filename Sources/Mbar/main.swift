@@ -204,10 +204,8 @@ final class DockBackgroundView: NSVisualEffectView {
     var onDropBundleID: ((String, CGPoint) -> Bool)?
     var onDragBundleID: ((String, CGPoint) -> Void)?
     var onMenu: (() -> NSMenu)?
-    private let glassGradientLayer = CAGradientLayer()
-    private let glassGradientMaskLayer = CAShapeLayer()
     private var glassCornerRadius: CGFloat = 0
-    private var isUsingGlassOverlays = false
+    private var usesRoundedMask = false
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -219,51 +217,16 @@ final class DockBackgroundView: NSVisualEffectView {
         updateGlassLayers()
     }
 
-    func applyGlassOverlays(enabled: Bool, cornerRadius: CGFloat) {
-        isUsingGlassOverlays = enabled
+    func applyRoundedGlassMask(enabled: Bool, cornerRadius: CGFloat) {
+        usesRoundedMask = enabled
         glassCornerRadius = cornerRadius
         maskImage = enabled ? Self.roundedMask(size: bounds.size, cornerRadius: cornerRadius) : nil
-
-        if enabled {
-            wantsLayer = true
-            if glassGradientLayer.superlayer == nil {
-                layer?.addSublayer(glassGradientLayer)
-            }
-
-            glassGradientLayer.colors = [
-                NSColor.white.withAlphaComponent(0.36).cgColor,
-                NSColor.white.withAlphaComponent(0.06).cgColor,
-                NSColor.white.withAlphaComponent(0.06).cgColor,
-                NSColor.white.withAlphaComponent(0.36).cgColor
-            ]
-            glassGradientLayer.locations = [0, 0.34, 0.66, 1]
-            glassGradientLayer.startPoint = CGPoint(x: 0, y: 1)
-            glassGradientLayer.endPoint = CGPoint(x: 1, y: 0)
-            glassGradientLayer.mask = glassGradientMaskLayer
-
-            glassGradientMaskLayer.fillColor = NSColor.clear.cgColor
-            glassGradientMaskLayer.strokeColor = NSColor.black.cgColor
-            glassGradientMaskLayer.lineWidth = 1.5
-            updateGlassLayers()
-        } else {
-            glassGradientLayer.removeFromSuperlayer()
-            glassGradientLayer.mask = nil
-        }
+        updateGlassLayers()
     }
 
     private func updateGlassLayers() {
-        guard isUsingGlassOverlays else { return }
+        guard usesRoundedMask else { return }
         maskImage = Self.roundedMask(size: bounds.size, cornerRadius: glassCornerRadius)
-        glassGradientLayer.frame = bounds
-        let strokeInset = glassGradientMaskLayer.lineWidth / 2
-        let strokeRect = bounds.insetBy(dx: strokeInset, dy: strokeInset)
-        glassGradientMaskLayer.frame = bounds
-        glassGradientMaskLayer.path = CGPath(
-            roundedRect: strokeRect,
-            cornerWidth: max(0, glassCornerRadius - strokeInset),
-            cornerHeight: max(0, glassCornerRadius - strokeInset),
-            transform: nil
-        )
     }
 
     private static func roundedMask(size: NSSize, cornerRadius: CGFloat) -> NSImage? {
@@ -2070,20 +2033,22 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             dockBackground.layer?.shadowOpacity = 0.28
             dockBackground.layer?.shadowRadius = 22
             dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 8)
-            dockBackground.applyGlassOverlays(enabled: false, cornerRadius: 22)
+            dockBackground.clipsToBounds = false
+            dockBackground.applyRoundedGlassMask(enabled: false, cornerRadius: 22)
         case .macOSGlass:
-            dockBackground.alphaValue = 0.58
-            dockBackground.blendingMode = .behindWindow
-            dockBackground.material = .underPageBackground
-            dockBackground.layer?.cornerRadius = 32
+            dockBackground.alphaValue = 0.72
+            dockBackground.blendingMode = .withinWindow
+            dockBackground.material = .popover
+            dockBackground.clipsToBounds = true
+            dockBackground.layer?.cornerRadius = 16
             dockBackground.layer?.borderWidth = 0
             dockBackground.layer?.borderColor = nil
             dockBackground.layer?.backgroundColor = NSColor.clear.cgColor
             dockBackground.layer?.shadowColor = NSColor.black.cgColor
-            dockBackground.layer?.shadowOpacity = 0.22
-            dockBackground.layer?.shadowRadius = 26
-            dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 8)
-            dockBackground.applyGlassOverlays(enabled: true, cornerRadius: 32)
+            dockBackground.layer?.shadowOpacity = 0.24
+            dockBackground.layer?.shadowRadius = 18
+            dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 5)
+            dockBackground.applyRoundedGlassMask(enabled: true, cornerRadius: 16)
         }
         dockBackground.needsDisplay = true
         dockBackground.needsLayout = true
