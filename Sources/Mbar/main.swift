@@ -1411,7 +1411,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         guard let index = BarTheme.allCases.firstIndex(where: { $0.displayName == sender.selectedItem?.title }) else { return }
         Settings.theme = BarTheme.allCases[index]
         refreshControls()
-        AppDelegate.shared?.refreshBarLayout()
+        AppDelegate.shared?.refreshBarTheme()
     }
 
     @objc private func rowsChanged(_ sender: NSStepper) {
@@ -2010,6 +2010,16 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             dockBackground.layer?.shadowRadius = 28
             dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 10)
         }
+        dockBackground.needsDisplay = true
+        dockBackground.needsLayout = true
+        dockBackground.layer?.setNeedsDisplay()
+    }
+
+    func refreshTheme() {
+        applyTheme()
+        panel.contentView?.needsDisplay = true
+        panel.contentView?.needsLayout = true
+        panel.invalidateShadow()
     }
 
     func reveal() {
@@ -2887,6 +2897,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func refreshBarLayout() {
         controllers.forEach { $0.refreshLayout() }
+    }
+
+    func refreshBarTheme() {
+        controllers.forEach { $0.refreshTheme() }
     }
 
     func showSettings() {
