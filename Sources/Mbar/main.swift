@@ -2070,15 +2070,16 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 8)
             dockBackground.applyGlassOverlays(enabled: false, cornerRadius: 22)
         case .macOSGlass:
-            dockBackground.material = .popover
+            dockBackground.blendingMode = .behindWindow
+            dockBackground.material = .underPageBackground
             dockBackground.layer?.cornerRadius = 32
             dockBackground.layer?.borderWidth = 0
             dockBackground.layer?.borderColor = nil
             dockBackground.layer?.backgroundColor = NSColor.clear.cgColor
-            dockBackground.layer?.shadowColor = NSColor.controlBackgroundColor.cgColor
-            dockBackground.layer?.shadowOpacity = 0.50
-            dockBackground.layer?.shadowRadius = 32
-            dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 5)
+            dockBackground.layer?.shadowColor = NSColor.black.cgColor
+            dockBackground.layer?.shadowOpacity = 0.22
+            dockBackground.layer?.shadowRadius = 26
+            dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 8)
             dockBackground.applyGlassOverlays(enabled: true, cornerRadius: 32)
         }
         dockBackground.needsDisplay = true
