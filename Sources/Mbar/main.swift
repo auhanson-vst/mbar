@@ -1458,6 +1458,7 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     private let badgeView = NSView()
     private let badgeLabel = NSTextField(labelWithString: "")
     private let showsActiveIndicator: Bool
+    private let showsRunningIndicator: Bool
     private let badgeText: String?
     private var mouseDownEvent: NSEvent?
     var onDragStarted: (() -> Void)?
@@ -1465,11 +1466,12 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     var onHoverStarted: ((TaskbarItemView) -> Void)?
     var onHoverEnded: (() -> Void)?
 
-    init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isHidden: Bool = false, attention: Bool = false, badgeText: String? = nil, target: AnyObject?, action: Selector?) {
+    init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isRunning: Bool = false, isHidden: Bool = false, attention: Bool = false, badgeText: String? = nil, target: AnyObject?, action: Selector?) {
         self.representedBundleID = bundleID
         self.representedPID = pid
         self.displayTitle = title
         self.showsActiveIndicator = isActive
+        self.showsRunningIndicator = isRunning || isActive
         self.badgeText = badgeText
         super.init(frame: .zero)
         self.cell = TaskbarIconCell()
@@ -1493,9 +1495,9 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
         layer?.shadowOffset = NSSize(width: 0, height: 3)
         contentTintColor = isHidden ? .tertiaryLabelColor : nil
 
-        activeIndicator.backgroundColor = (isActive ? NSColor.controlAccentColor : NSColor.secondaryLabelColor.withAlphaComponent(0.72)).cgColor
+        activeIndicator.backgroundColor = (isActive ? NSColor.controlAccentColor : NSColor.secondaryLabelColor.withAlphaComponent(0.55)).cgColor
         activeIndicator.cornerRadius = 2
-        activeIndicator.isHidden = !showsActiveIndicator
+        activeIndicator.isHidden = !showsRunningIndicator
         layer?.addSublayer(activeIndicator)
 
         badgeView.wantsLayer = true
@@ -1554,16 +1556,18 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
 
     override func layout() {
         super.layout()
-        let width: CGFloat = showsActiveIndicator ? 18 : 0
+        let length: CGFloat = showsActiveIndicator ? 18 : 7
+        let thickness: CGFloat = showsActiveIndicator ? 4 : 3
+        activeIndicator.cornerRadius = thickness / 2
         switch Settings.edge {
         case .bottom:
-            activeIndicator.frame = CGRect(x: (bounds.width - width) / 2, y: 2, width: width, height: 4)
+            activeIndicator.frame = CGRect(x: (bounds.width - length) / 2, y: 2, width: length, height: thickness)
         case .top:
-            activeIndicator.frame = CGRect(x: (bounds.width - width) / 2, y: bounds.maxY - 6, width: width, height: 4)
+            activeIndicator.frame = CGRect(x: (bounds.width - length) / 2, y: bounds.maxY - thickness - 2, width: length, height: thickness)
         case .left:
-            activeIndicator.frame = CGRect(x: 2, y: (bounds.height - width) / 2, width: 4, height: width)
+            activeIndicator.frame = CGRect(x: 2, y: (bounds.height - length) / 2, width: thickness, height: length)
         case .right:
-            activeIndicator.frame = CGRect(x: bounds.maxX - 6, y: (bounds.height - width) / 2, width: 4, height: width)
+            activeIndicator.frame = CGRect(x: bounds.maxX - thickness - 2, y: (bounds.height - length) / 2, width: thickness, height: length)
         }
         let badgeWidth: CGFloat = badgeText.map { $0.count > 1 ? 24 : 18 } ?? 18
         let badgeY = isFlipped ? 3 : bounds.maxY - 15
@@ -2067,7 +2071,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         let icon = app.icon ?? NSImage(systemSymbolName: "app", accessibilityDescription: title)
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
         let badge = badgeText(for: app)
-        let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isHidden: app.isHidden, attention: false, badgeText: badge, target: self, action: #selector(activateApp(_:)))
+        let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isRunning: true, isHidden: app.isHidden, attention: false, badgeText: badge, target: self, action: #selector(activateApp(_:)))
         button.menu = appMenu(app)
         button.onDragStarted = { [weak self] in
             if let bundleID = app.bundleIdentifier {
