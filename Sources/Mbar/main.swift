@@ -204,7 +204,6 @@ final class DockBackgroundView: NSVisualEffectView {
     var onDropBundleID: ((String, CGPoint) -> Bool)?
     var onDragBundleID: ((String, CGPoint) -> Void)?
     var onMenu: (() -> NSMenu)?
-    private let glassColorWashLayer = CALayer()
     private let glassGradientLayer = CAGradientLayer()
     private let glassGradientMaskLayer = CAShapeLayer()
     private var glassCornerRadius: CGFloat = 0
@@ -227,21 +226,15 @@ final class DockBackgroundView: NSVisualEffectView {
 
         if enabled {
             wantsLayer = true
-            if glassColorWashLayer.superlayer == nil {
-                layer?.insertSublayer(glassColorWashLayer, at: 0)
-            }
             if glassGradientLayer.superlayer == nil {
                 layer?.addSublayer(glassGradientLayer)
             }
 
-            glassColorWashLayer.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
-            glassColorWashLayer.masksToBounds = true
-
             glassGradientLayer.colors = [
-                NSColor.white.withAlphaComponent(0.48).cgColor,
-                NSColor.white.withAlphaComponent(0.10).cgColor,
-                NSColor.white.withAlphaComponent(0.10).cgColor,
-                NSColor.white.withAlphaComponent(0.48).cgColor
+                NSColor.white.withAlphaComponent(0.36).cgColor,
+                NSColor.white.withAlphaComponent(0.06).cgColor,
+                NSColor.white.withAlphaComponent(0.06).cgColor,
+                NSColor.white.withAlphaComponent(0.36).cgColor
             ]
             glassGradientLayer.locations = [0, 0.34, 0.66, 1]
             glassGradientLayer.startPoint = CGPoint(x: 0, y: 1)
@@ -253,7 +246,6 @@ final class DockBackgroundView: NSVisualEffectView {
             glassGradientMaskLayer.lineWidth = 1.5
             updateGlassLayers()
         } else {
-            glassColorWashLayer.removeFromSuperlayer()
             glassGradientLayer.removeFromSuperlayer()
             glassGradientLayer.mask = nil
         }
@@ -262,8 +254,6 @@ final class DockBackgroundView: NSVisualEffectView {
     private func updateGlassLayers() {
         guard isUsingGlassOverlays else { return }
         maskImage = Self.roundedMask(size: bounds.size, cornerRadius: glassCornerRadius)
-        glassColorWashLayer.frame = bounds
-        glassColorWashLayer.cornerRadius = glassCornerRadius
         glassGradientLayer.frame = bounds
         let strokeInset = glassGradientMaskLayer.lineWidth / 2
         let strokeRect = bounds.insetBy(dx: strokeInset, dy: strokeInset)
