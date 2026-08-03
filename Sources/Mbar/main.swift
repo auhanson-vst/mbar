@@ -2306,8 +2306,11 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             separator.widthAnchor.constraint(equalToConstant: 2).isActive = true
             separator.heightAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
         }
+        if let previous = stackView.arrangedSubviews.last {
+            stackView.setCustomSpacing(Settings.itemSpacing * 2, after: previous)
+        }
         stackView.addArrangedSubview(separator)
-        stackView.setCustomSpacing(max(3, Settings.itemSpacing * 0.45), after: separator)
+        stackView.setCustomSpacing(Settings.itemSpacing * 2, after: separator)
     }
 
     private func addTrashButton() {
