@@ -204,10 +204,77 @@ final class DockBackgroundView: NSVisualEffectView {
     var onDropBundleID: ((String, CGPoint) -> Bool)?
     var onDragBundleID: ((String, CGPoint) -> Void)?
     var onMenu: (() -> NSMenu)?
+    private let glassTopHighlightLayer = CAGradientLayer()
+    private let glassBottomShadeLayer = CAGradientLayer()
+    private var glassCornerRadius: CGFloat = 0
+    private var isUsingGlassOverlays = false
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         registerForDraggedTypes([appDragPasteboardType])
+    }
+
+    override func layout() {
+        super.layout()
+        updateGlassLayers()
+    }
+
+    func applyGlassOverlays(enabled: Bool, cornerRadius: CGFloat) {
+        isUsingGlassOverlays = enabled
+        glassCornerRadius = cornerRadius
+        maskImage = enabled ? Self.roundedMask(size: bounds.size, cornerRadius: cornerRadius) : nil
+
+        if enabled {
+            wantsLayer = true
+            if glassTopHighlightLayer.superlayer == nil {
+                layer?.addSublayer(glassTopHighlightLayer)
+            }
+            if glassBottomShadeLayer.superlayer == nil {
+                layer?.addSublayer(glassBottomShadeLayer)
+            }
+
+            glassTopHighlightLayer.colors = [
+                NSColor.white.withAlphaComponent(0.34).cgColor,
+                NSColor.white.withAlphaComponent(0.10).cgColor,
+                NSColor.clear.cgColor
+            ]
+            glassTopHighlightLayer.locations = [0, 0.32, 1]
+            glassTopHighlightLayer.startPoint = CGPoint(x: 0.5, y: 1)
+            glassTopHighlightLayer.endPoint = CGPoint(x: 0.5, y: 0)
+
+            glassBottomShadeLayer.colors = [
+                NSColor.clear.cgColor,
+                NSColor.black.withAlphaComponent(0.10).cgColor
+            ]
+            glassBottomShadeLayer.locations = [0.25, 1]
+            glassBottomShadeLayer.startPoint = CGPoint(x: 0.5, y: 1)
+            glassBottomShadeLayer.endPoint = CGPoint(x: 0.5, y: 0)
+            updateGlassLayers()
+        } else {
+            glassTopHighlightLayer.removeFromSuperlayer()
+            glassBottomShadeLayer.removeFromSuperlayer()
+        }
+    }
+
+    private func updateGlassLayers() {
+        guard isUsingGlassOverlays else { return }
+        maskImage = Self.roundedMask(size: bounds.size, cornerRadius: glassCornerRadius)
+        glassTopHighlightLayer.frame = bounds
+        glassBottomShadeLayer.frame = bounds
+        glassTopHighlightLayer.cornerRadius = glassCornerRadius
+        glassBottomShadeLayer.cornerRadius = glassCornerRadius
+    }
+
+    private static func roundedMask(size: NSSize, cornerRadius: CGFloat) -> NSImage? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.black.setFill()
+        NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: cornerRadius, yRadius: cornerRadius).fill()
+        image.unlockFocus()
+        image.capInsets = NSEdgeInsets(top: cornerRadius, left: cornerRadius, bottom: cornerRadius, right: cornerRadius)
+        image.resizingMode = .stretch
+        return image
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -2000,15 +2067,17 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             dockBackground.layer?.shadowOpacity = 0.28
             dockBackground.layer?.shadowRadius = 22
             dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 8)
+            dockBackground.applyGlassOverlays(enabled: false, cornerRadius: 22)
         case .macOSGlass:
-            dockBackground.material = .underWindowBackground
+            dockBackground.material = .popover
             dockBackground.layer?.cornerRadius = 24
-            dockBackground.layer?.borderWidth = 0.5
-            dockBackground.layer?.borderColor = NSColor.white.withAlphaComponent(0.38).cgColor
-            dockBackground.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.10).cgColor
-            dockBackground.layer?.shadowOpacity = 0.34
-            dockBackground.layer?.shadowRadius = 28
-            dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 10)
+            dockBackground.layer?.borderWidth = 0
+            dockBackground.layer?.borderColor = nil
+            dockBackground.layer?.backgroundColor = NSColor.clear.cgColor
+            dockBackground.layer?.shadowOpacity = 0.30
+            dockBackground.layer?.shadowRadius = 30
+            dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 12)
+            dockBackground.applyGlassOverlays(enabled: true, cornerRadius: 24)
         }
         dockBackground.needsDisplay = true
         dockBackground.needsLayout = true
