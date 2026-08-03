@@ -2107,6 +2107,11 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private func scheduleWindowTitlePanel(for app: NSRunningApplication, relativeTo button: TaskbarItemView) {
         hoverWindowWorkItem?.cancel()
         windowTitleHideWorkItem?.cancel()
+        if windowTitlePanel.isVisible {
+            windowTitlePanel.hideImmediately()
+            windowTitleSourceIconFrame = .null
+            isMouseInWindowTitlePanel = false
+        }
         guard !isDraggingIcon else { return }
         let item = DispatchWorkItem { [weak self, weak button, weak app] in
             Task { @MainActor in
