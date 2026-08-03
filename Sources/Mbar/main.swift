@@ -2425,19 +2425,20 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         wrapper.addSubview(separator)
 
         let margin = max(14, Settings.itemSpacing * 2)
+        let trailingMargin = margin + 4
         if Settings.edge == .left || Settings.edge == .right {
             wrapper.widthAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
-            wrapper.heightAnchor.constraint(equalToConstant: 2 + margin * 2).isActive = true
+            wrapper.heightAnchor.constraint(equalToConstant: 2 + margin + trailingMargin).isActive = true
             separator.widthAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
             separator.heightAnchor.constraint(equalToConstant: 2).isActive = true
             separator.centerXAnchor.constraint(equalTo: wrapper.centerXAnchor).isActive = true
-            separator.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor).isActive = true
+            separator.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor, constant: (trailingMargin - margin) / 2).isActive = true
         } else {
-            wrapper.widthAnchor.constraint(equalToConstant: 2 + margin * 2).isActive = true
+            wrapper.widthAnchor.constraint(equalToConstant: 2 + margin + trailingMargin).isActive = true
             wrapper.heightAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
             separator.widthAnchor.constraint(equalToConstant: 2).isActive = true
             separator.heightAnchor.constraint(equalToConstant: Settings.barSize - 24).isActive = true
-            separator.centerXAnchor.constraint(equalTo: wrapper.centerXAnchor).isActive = true
+            separator.centerXAnchor.constraint(equalTo: wrapper.centerXAnchor, constant: (margin - trailingMargin) / 2).isActive = true
             separator.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor).isActive = true
         }
         stackView.addArrangedSubview(wrapper)
