@@ -204,8 +204,9 @@ final class DockBackgroundView: NSVisualEffectView {
     var onDropBundleID: ((String, CGPoint) -> Bool)?
     var onDragBundleID: ((String, CGPoint) -> Void)?
     var onMenu: (() -> NSMenu)?
-    private let glassTopHighlightLayer = CAGradientLayer()
-    private let glassBottomShadeLayer = CAGradientLayer()
+    private let glassColorWashLayer = CALayer()
+    private let glassGradientLayer = CAGradientLayer()
+    private let glassGradientMaskLayer = CAShapeLayer()
     private var glassCornerRadius: CGFloat = 0
     private var isUsingGlassOverlays = false
 
@@ -226,43 +227,53 @@ final class DockBackgroundView: NSVisualEffectView {
 
         if enabled {
             wantsLayer = true
-            if glassTopHighlightLayer.superlayer == nil {
-                layer?.addSublayer(glassTopHighlightLayer)
+            if glassColorWashLayer.superlayer == nil {
+                layer?.insertSublayer(glassColorWashLayer, at: 0)
             }
-            if glassBottomShadeLayer.superlayer == nil {
-                layer?.addSublayer(glassBottomShadeLayer)
+            if glassGradientLayer.superlayer == nil {
+                layer?.addSublayer(glassGradientLayer)
             }
 
-            glassTopHighlightLayer.colors = [
-                NSColor.white.withAlphaComponent(0.34).cgColor,
+            glassColorWashLayer.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
+            glassColorWashLayer.masksToBounds = true
+
+            glassGradientLayer.colors = [
+                NSColor.white.withAlphaComponent(0.48).cgColor,
                 NSColor.white.withAlphaComponent(0.10).cgColor,
-                NSColor.clear.cgColor
+                NSColor.white.withAlphaComponent(0.10).cgColor,
+                NSColor.white.withAlphaComponent(0.48).cgColor
             ]
-            glassTopHighlightLayer.locations = [0, 0.32, 1]
-            glassTopHighlightLayer.startPoint = CGPoint(x: 0.5, y: 1)
-            glassTopHighlightLayer.endPoint = CGPoint(x: 0.5, y: 0)
+            glassGradientLayer.locations = [0, 0.34, 0.66, 1]
+            glassGradientLayer.startPoint = CGPoint(x: 0, y: 1)
+            glassGradientLayer.endPoint = CGPoint(x: 1, y: 0)
+            glassGradientLayer.mask = glassGradientMaskLayer
 
-            glassBottomShadeLayer.colors = [
-                NSColor.clear.cgColor,
-                NSColor.black.withAlphaComponent(0.10).cgColor
-            ]
-            glassBottomShadeLayer.locations = [0.25, 1]
-            glassBottomShadeLayer.startPoint = CGPoint(x: 0.5, y: 1)
-            glassBottomShadeLayer.endPoint = CGPoint(x: 0.5, y: 0)
+            glassGradientMaskLayer.fillColor = NSColor.clear.cgColor
+            glassGradientMaskLayer.strokeColor = NSColor.black.cgColor
+            glassGradientMaskLayer.lineWidth = 1.5
             updateGlassLayers()
         } else {
-            glassTopHighlightLayer.removeFromSuperlayer()
-            glassBottomShadeLayer.removeFromSuperlayer()
+            glassColorWashLayer.removeFromSuperlayer()
+            glassGradientLayer.removeFromSuperlayer()
+            glassGradientLayer.mask = nil
         }
     }
 
     private func updateGlassLayers() {
         guard isUsingGlassOverlays else { return }
         maskImage = Self.roundedMask(size: bounds.size, cornerRadius: glassCornerRadius)
-        glassTopHighlightLayer.frame = bounds
-        glassBottomShadeLayer.frame = bounds
-        glassTopHighlightLayer.cornerRadius = glassCornerRadius
-        glassBottomShadeLayer.cornerRadius = glassCornerRadius
+        glassColorWashLayer.frame = bounds
+        glassColorWashLayer.cornerRadius = glassCornerRadius
+        glassGradientLayer.frame = bounds
+        let strokeInset = glassGradientMaskLayer.lineWidth / 2
+        let strokeRect = bounds.insetBy(dx: strokeInset, dy: strokeInset)
+        glassGradientMaskLayer.frame = bounds
+        glassGradientMaskLayer.path = CGPath(
+            roundedRect: strokeRect,
+            cornerWidth: max(0, glassCornerRadius - strokeInset),
+            cornerHeight: max(0, glassCornerRadius - strokeInset),
+            transform: nil
+        )
     }
 
     private static func roundedMask(size: NSSize, cornerRadius: CGFloat) -> NSImage? {
@@ -2070,14 +2081,15 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             dockBackground.applyGlassOverlays(enabled: false, cornerRadius: 22)
         case .macOSGlass:
             dockBackground.material = .popover
-            dockBackground.layer?.cornerRadius = 24
+            dockBackground.layer?.cornerRadius = 32
             dockBackground.layer?.borderWidth = 0
             dockBackground.layer?.borderColor = nil
             dockBackground.layer?.backgroundColor = NSColor.clear.cgColor
-            dockBackground.layer?.shadowOpacity = 0.30
-            dockBackground.layer?.shadowRadius = 30
-            dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 12)
-            dockBackground.applyGlassOverlays(enabled: true, cornerRadius: 24)
+            dockBackground.layer?.shadowColor = NSColor.controlBackgroundColor.cgColor
+            dockBackground.layer?.shadowOpacity = 0.50
+            dockBackground.layer?.shadowRadius = 32
+            dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 5)
+            dockBackground.applyGlassOverlays(enabled: true, cornerRadius: 32)
         }
         dockBackground.needsDisplay = true
         dockBackground.needsLayout = true
