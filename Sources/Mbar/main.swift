@@ -2105,7 +2105,9 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         let item = DispatchWorkItem { [weak self, weak button, weak app] in
             Task { @MainActor in
                 guard let self, self.isRevealed, let button, let app, button.window != nil else { return }
-                self.windowTitlePanel.show(items: self.windowListItems(for: app), relativeTo: button, edge: Settings.edge)
+                let items = self.windowListItems(for: app)
+                guard items.count > 1 else { return }
+                self.windowTitlePanel.show(items: items, relativeTo: button, edge: Settings.edge)
             }
         }
         hoverWindowWorkItem = item
