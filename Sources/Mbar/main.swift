@@ -672,6 +672,11 @@ final class WindowTitlePanel: NSPanel {
         }
     }
 
+    func hideImmediately() {
+        orderOut(nil)
+        alphaValue = 1
+    }
+
     @objc private func openWindowRow(_ sender: WindowTitleRowButton) {
         guard items.indices.contains(sender.tag) else { return }
         items[sender.tag].open()
@@ -1997,7 +2002,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         }
         isRevealed = false
         applicationGridPanel.orderOut(nil)
-        hideWindowTitlePanel()
+        hideWindowTitlePanel(animated: false)
         guard panel.isVisible else { return }
         if animated {
             NSAnimationContext.runAnimationGroup { context in
@@ -2099,7 +2104,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         guard !isDraggingIcon else { return }
         let item = DispatchWorkItem { [weak self, weak button, weak app] in
             Task { @MainActor in
-                guard let self, let button, let app, button.window != nil else { return }
+                guard let self, self.isRevealed, let button, let app, button.window != nil else { return }
                 self.windowTitlePanel.show(items: self.windowListItems(for: app), relativeTo: button, edge: Settings.edge)
             }
         }
@@ -2107,12 +2112,16 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: item)
     }
 
-    private func hideWindowTitlePanel() {
+    private func hideWindowTitlePanel(animated: Bool = true) {
         hoverWindowWorkItem?.cancel()
         windowTitleHideWorkItem?.cancel()
         hoverWindowWorkItem = nil
         windowTitleHideWorkItem = nil
-        windowTitlePanel.hideAnimated()
+        if animated {
+            windowTitlePanel.hideAnimated()
+        } else {
+            windowTitlePanel.hideImmediately()
+        }
     }
 
     private func scheduleWindowTitleHide() {
@@ -2459,8 +2468,9 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func pinnedMenu(bundleID: String) -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(withTitle: "Launch", action: #selector(menuLaunchPinned(_:)), keyEquivalent: "").representedObject = bundleID
-        menu.addItem(withTitle: "Unpin from mbar", action: #selector(menuUnpin(_:)), keyEquivalent: "").representedObject = bundleID
+        menu.autoenablesItems = false
+        addMenuItem(to: menu, title: "Open", action: #selector(menuLaunchPinned(_:)), representedObject: bundleID)
+        addMenuItem(to: menu, title: "Unpin from mbar", action: #selector(menuUnpin(_:)), representedObject: bundleID)
         return menu
     }
 
