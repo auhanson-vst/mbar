@@ -2027,7 +2027,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         hoverView.wantsLayer = true
         hoverView.layer?.backgroundColor = NSColor.clear.cgColor
         hoverView.addSubview(dockBackground)
-        dockBackground.addSubview(stackView)
+        hoverView.addSubview(stackView, positioned: .above, relativeTo: dockBackground)
         panel.contentView = hoverView
 
         NSLayoutConstraint.activate([
@@ -2060,6 +2060,8 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         dockBackground.layer?.cornerCurve = .continuous
         switch Settings.theme {
         case .default:
+            dockBackground.alphaValue = 1
+            dockBackground.blendingMode = .behindWindow
             dockBackground.material = .hudWindow
             dockBackground.layer?.cornerRadius = 22
             dockBackground.layer?.borderWidth = 0.75
@@ -2070,6 +2072,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             dockBackground.layer?.shadowOffset = NSSize(width: 0, height: 8)
             dockBackground.applyGlassOverlays(enabled: false, cornerRadius: 22)
         case .macOSGlass:
+            dockBackground.alphaValue = 0.58
             dockBackground.blendingMode = .behindWindow
             dockBackground.material = .underPageBackground
             dockBackground.layer?.cornerRadius = 32
