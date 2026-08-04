@@ -2538,23 +2538,6 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         addMenuItem(to: menu, title: app.isHidden ? "Unhide" : "Hide", action: #selector(menuHide(_:)), representedObject: app)
         menu.addItem(NSMenuItem.separator())
 
-        let windowMenuItem = NSMenuItem(title: "Windows", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
-        for title in windowTitles(for: app) {
-            let item = NSMenuItem(title: title, action: #selector(menuActivate(_:)), keyEquivalent: "")
-            item.representedObject = app
-            item.target = self
-            item.isEnabled = true
-            submenu.addItem(item)
-        }
-        if submenu.items.isEmpty {
-            submenu.addItem(withTitle: "No public windows", action: nil, keyEquivalent: "")
-        }
-        menu.setSubmenu(submenu, for: windowMenuItem)
-        menu.addItem(windowMenuItem)
-
-        menu.addItem(NSMenuItem.separator())
         if let bundleID = app.bundleIdentifier, Settings.pinnedBundleIDs.contains(bundleID) {
             addMenuItem(to: menu, title: "Unpin from mbar", action: #selector(menuUnpin(_:)), representedObject: bundleID)
         } else if let bundleID = app.bundleIdentifier {
