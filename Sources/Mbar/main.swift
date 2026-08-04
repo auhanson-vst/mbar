@@ -160,6 +160,12 @@ struct WindowInfo {
     let bounds: CGRect
 }
 
+struct AppPresentationMetadata {
+    let url: URL?
+    let displayName: String
+    let icon: NSImage?
+}
+
 struct WindowListItem {
     let title: String
     let open: () -> Void
@@ -2052,7 +2058,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             guard let bundleID = app.bundleIdentifier else { return nil }
             return (bundleID, app)
         })
-        dockBadges = DockBadgeCatalog.badgeTexts()
+        dockBadges = AppDelegate.shared?.dockBadgeSnapshot() ?? [:]
 
         if Settings.activityMode {
             activitySamples = ActivitySampler.samples(for: apps.map(\.processIdentifier))
@@ -2073,6 +2079,8 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         let defaultOrder = pinnedIDs + runningBundleIDs.filter { !pinnedIDs.contains($0) }
         let savedOrder = Settings.appOrderBundleIDs
         let orderedBundleIDs = savedOrder.filter { defaultOrder.contains($0) } + defaultOrder.filter { !savedOrder.contains($0) }
+        let missingMetadata = Set(orderedBundleIDs.filter { AppDelegate.shared?.metadata(for: $0) == nil })
+        AppDelegate.shared?.schedulePresentationRefresh(for: missingMetadata, refreshBadges: false)
         for bundleID in orderedBundleIDs {
             guard !renderedBundleIDs.contains(bundleID) else { continue }
             if let app = runningApps[bundleID] {
@@ -2369,9 +2377,9 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             return
         }
 
-        let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-        let title = url?.deletingPathExtension().lastPathComponent ?? bundleID
-        let icon = url.map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSImage(systemSymbolName: "app", accessibilityDescription: title)
+        let metadata = AppDelegate.shared?.metadata(for: bundleID)
+        let title = metadata?.displayName ?? bundleID
+        let icon = (metadata?.icon?.copy() as? NSImage) ?? NSImage(systemSymbolName: "app", accessibilityDescription: title)
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
         let button = TaskbarItemView(title: title, image: icon, bundleID: bundleID, pid: nil, isActive: false, target: self, action: #selector(launchPinned(_:)))
         button.menu = pinnedMenu(bundleID: bundleID)
@@ -2387,11 +2395,13 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func addAppItem(_ app: NSRunningApplication) {
-        let title = titleFor(app)
-        let icon = app.icon ?? NSImage(systemSymbolName: "app", accessibilityDescription: title)
+        let bundleID = app.bundleIdentifier
+        let metadata = bundleID.flatMap { AppDelegate.shared?.metadata(for: $0) }
+        let title = titleFor(app, displayName: metadata?.displayName)
+        let icon = (metadata?.icon?.copy() as? NSImage) ?? NSImage(systemSymbolName: "app", accessibilityDescription: title)
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
         let badge = badgeText(for: app)
-        let button = TaskbarItemView(title: title, image: icon, bundleID: app.bundleIdentifier, pid: app.processIdentifier, isActive: app.isActive, isRunning: true, isHidden: app.isHidden, attention: false, badgeText: badge, target: self, action: #selector(activateApp(_:)))
+        let button = TaskbarItemView(title: title, image: icon, bundleID: bundleID, pid: app.processIdentifier, isActive: app.isActive, isRunning: true, isHidden: app.isHidden, attention: false, badgeText: badge, target: self, action: #selector(activateApp(_:)))
         button.menu = appMenu(app)
         button.onDragStarted = { [weak self] in
             if let bundleID = app.bundleIdentifier {
@@ -2655,8 +2665,8 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         return NSWorkspace.shared.icon(forFile: trashURL.path)
     }
 
-    private func titleFor(_ app: NSRunningApplication) -> String {
-        var components = [app.localizedName ?? app.bundleIdentifier ?? "App"]
+    private func titleFor(_ app: NSRunningApplication, displayName: String? = nil) -> String {
+        var components = [displayName ?? app.bundleIdentifier ?? "App"]
         if app.isActive {
             components.append("•")
         }
@@ -2746,7 +2756,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
                 addMenuItem(to: optionsMenu, title: "Keep in mbar", action: #selector(menuPin(_:)), representedObject: bundleID)
             }
             addMenuItem(to: optionsMenu, title: "Hide Icon from mbar", action: #selector(menuHideIconFromMbar(_:)), representedObject: bundleID)
-            if let url = app.bundleURL {
+            if let url = AppDelegate.shared?.metadata(for: bundleID)?.url {
                 addMenuItem(to: optionsMenu, title: "Open at Login", action: #selector(menuOpenAtLogin(_:)), representedObject: url)
                 addMenuItem(to: optionsMenu, title: "Show in Finder", action: #selector(menuShowInFinder(_:)), representedObject: url)
             }
@@ -2832,7 +2842,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         let optionsMenu = NSMenu()
         optionsMenu.autoenablesItems = false
         addMenuItem(to: optionsMenu, title: "Remove from mbar", action: #selector(menuUnpin(_:)), representedObject: bundleID)
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+        if let url = AppDelegate.shared?.metadata(for: bundleID)?.url {
             addMenuItem(to: optionsMenu, title: "Open at Login", action: #selector(menuOpenAtLogin(_:)), representedObject: url)
             addMenuItem(to: optionsMenu, title: "Show in Finder", action: #selector(menuShowInFinder(_:)), representedObject: url)
         }
@@ -3155,6 +3165,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var applicationCatalogTimer: Timer?
     private var globalEventMonitor: Any?
     private var localEventMonitor: Any?
+    private var presentationMetadata: [String: AppPresentationMetadata] = [:]
+    private var dockBadgeCache: [String: String] = [:]
+    private var pendingPresentationBundleIDs = Set<String>()
+    private var pendingPresentationBadgeRefresh = false
+    private var presentationRefreshWorkItem: DispatchWorkItem?
 
     var isSettingsVisible: Bool {
         settingsWindowController.window?.isVisible == true
@@ -3181,7 +3196,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.controllers.forEach { $0.rebuild() }
+                self?.schedulePresentationRefresh(for: [], refreshBadges: true)
+                if Settings.activityMode {
+                    self?.controllers.forEach { $0.rebuild() }
+                }
             }
         }
         applicationCatalogTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
@@ -3196,6 +3214,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationURLs() -> [URL] {
         applicationCatalog.refreshIfNeeded()
         return applicationCatalog.urls
+    }
+
+    func metadata(for bundleID: String) -> AppPresentationMetadata? {
+        presentationMetadata[bundleID]
+    }
+
+    func dockBadgeSnapshot() -> [String: String] {
+        dockBadgeCache
+    }
+
+    func schedulePresentationRefresh(for bundleIDs: Set<String>, refreshBadges: Bool) {
+        pendingPresentationBundleIDs.formUnion(bundleIDs)
+        pendingPresentationBadgeRefresh = pendingPresentationBadgeRefresh || refreshBadges
+        presentationRefreshWorkItem?.cancel()
+
+        let item = DispatchWorkItem { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                self?.startPresentationRefresh()
+            }
+        }
+        presentationRefreshWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
+    }
+
+    private func startPresentationRefresh() {
+        let bundleIDs = pendingPresentationBundleIDs
+        let shouldRefreshBadges = pendingPresentationBadgeRefresh
+        pendingPresentationBundleIDs.removeAll()
+        pendingPresentationBadgeRefresh = false
+        guard !bundleIDs.isEmpty || shouldRefreshBadges else { return }
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var metadata: [String: AppPresentationMetadata] = [:]
+            for bundleID in bundleIDs {
+                let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+                let name = url?.deletingPathExtension().lastPathComponent ?? bundleID
+                let icon = url.map { NSWorkspace.shared.icon(forFile: $0.path) }
+                metadata[bundleID] = AppPresentationMetadata(url: url, displayName: name, icon: icon)
+            }
+            let badges = shouldRefreshBadges ? DockBadgeCatalog.badgeTexts() : nil
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.presentationMetadata.merge(metadata) { _, new in new }
+                if let badges {
+                    self.dockBadgeCache = badges
+                }
+                self.controllers.forEach { $0.rebuild() }
+            }
+        }
     }
 
     func rebuildBars(preserveVisibility: Bool = false) {
@@ -3239,6 +3307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func workspaceChanged(_ notification: Notification) {
         controllers.forEach { $0.rebuild() }
+        schedulePresentationRefresh(for: [], refreshBadges: true)
     }
 
     @objc private func screenChanged(_ notification: Notification) {
