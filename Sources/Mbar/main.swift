@@ -2022,6 +2022,18 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         }
     }
 
+    func closePanels() {
+        hideWorkItem?.cancel()
+        hoverWindowWorkItem?.cancel()
+        windowTitleHideWorkItem?.cancel()
+        applicationGridPanel.orderOut(nil)
+        windowTitlePanel.orderOut(nil)
+        panel.orderOut(nil)
+        triggerPanel.orderOut(nil)
+        panel.close()
+        triggerPanel.close()
+    }
+
     func rebuild() {
         let wasVisible = panel.isVisible
         panel.setFrame(wasVisible ? Self.frame(for: screen) : Self.hiddenFrame(for: screen), display: true, animate: false)
@@ -3187,7 +3199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func rebuildBars(preserveVisibility: Bool = false) {
-        controllers.forEach { $0.panel.orderOut(nil) }
+        controllers.forEach { $0.closePanels() }
         controllers = NSScreen.screens.map(TaskbarController.init(screen:))
         controllers.forEach {
             $0.rebuild()
