@@ -1309,6 +1309,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             fullWidth(showApplicationsCheckbox),
             fullWidth(showTrashCheckbox)
         ]
+        rows.append(fullWidth(pinnedAppsList()))
         rows.append(fullWidth(hiddenAppsList()))
 
         return section(
@@ -1316,6 +1317,63 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             detail: "Choose built-in items and restore any app icons hidden from mbar.",
             rows: rows
         )
+    }
+
+    private func pinnedAppsList() -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = NSTextField(labelWithString: "Pinned")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        stack.addArrangedSubview(title)
+
+        let pinnedBundleIDs = Settings.pinnedBundleIDs
+        if pinnedBundleIDs.isEmpty {
+            let empty = NSTextField(labelWithString: "No pinned apps.")
+            empty.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(empty)
+        } else {
+            for (index, bundleID) in pinnedBundleIDs.enumerated() {
+                stack.addArrangedSubview(pinnedAppRow(bundleID: bundleID, index: index, count: pinnedBundleIDs.count))
+            }
+        }
+
+        return stack
+    }
+
+    private func pinnedAppRow(bundleID: String, index: Int, count: Int) -> NSView {
+        let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        let name = url?.deletingPathExtension().lastPathComponent ?? bundleID
+        let label = NSTextField(labelWithString: name)
+        label.lineBreakMode = .byTruncatingTail
+
+        let upButton = NSButton(title: "↑", target: self, action: #selector(movePinnedAppUp(_:)))
+        upButton.identifier = NSUserInterfaceItemIdentifier(bundleID)
+        upButton.isEnabled = index > 0
+
+        let downButton = NSButton(title: "↓", target: self, action: #selector(movePinnedAppDown(_:)))
+        downButton.identifier = NSUserInterfaceItemIdentifier(bundleID)
+        downButton.isEnabled = index < count - 1
+
+        let removeButton = NSButton(title: "Remove", target: self, action: #selector(removePinnedApp(_:)))
+        removeButton.identifier = NSUserInterfaceItemIdentifier(bundleID)
+
+        let stack = NSStackView(views: [label, upButton, downButton, removeButton])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.distribution = .fill
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.widthAnchor.constraint(equalToConstant: 444),
+            upButton.widthAnchor.constraint(equalToConstant: 32),
+            downButton.widthAnchor.constraint(equalToConstant: 32),
+            removeButton.widthAnchor.constraint(equalToConstant: 76)
+        ])
+        return stack
     }
 
     private func hiddenAppsList() -> NSView {
@@ -1549,12 +1607,42 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         AppDelegate.shared?.rebuildBars()
     }
 
-    @objc private func unhideAppIcon(_ sender: NSButton) {
+    @objc private func movePinnedAppUp(_ sender: NSButton) {
         guard let bundleID = sender.identifier?.rawValue else { return }
-        Settings.hiddenBundleIDs.removeAll { $0 == bundleID }
+        movePinnedApp(bundleID: bundleID, offset: -1)
+    }
+
+    @objc private func movePinnedAppDown(_ sender: NSButton) {
+        guard let bundleID = sender.identifier?.rawValue else { return }
+        movePinnedApp(bundleID: bundleID, offset: 1)
+    }
+
+    @objc private func removePinnedApp(_ sender: NSButton) {
+        guard let bundleID = sender.identifier?.rawValue else { return }
+        Settings.pinnedBundleIDs.removeAll { $0 == bundleID }
+        refreshItemsPane()
+    }
+
+    private func movePinnedApp(bundleID: String, offset: Int) {
+        var pinnedBundleIDs = Settings.pinnedBundleIDs
+        guard let index = pinnedBundleIDs.firstIndex(of: bundleID) else { return }
+        let newIndex = index + offset
+        guard pinnedBundleIDs.indices.contains(newIndex) else { return }
+        pinnedBundleIDs.swapAt(index, newIndex)
+        Settings.pinnedBundleIDs = pinnedBundleIDs
+        refreshItemsPane()
+    }
+
+    private func refreshItemsPane() {
         refreshControls()
         selectPane(.items)
         AppDelegate.shared?.rebuildBars()
+    }
+
+    @objc private func unhideAppIcon(_ sender: NSButton) {
+        guard let bundleID = sender.identifier?.rawValue else { return }
+        Settings.hiddenBundleIDs.removeAll { $0 == bundleID }
+        refreshItemsPane()
     }
 
     @objc private func openAccessibilitySettings(_ sender: NSButton) {
