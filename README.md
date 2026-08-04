@@ -75,7 +75,7 @@ The default UX hides until the pointer touches the configured screen edge, then 
 
 Right-click empty space on mbar to open a Dock-style context menu with settings, activity mode, position, system settings, and quit actions. The settings window uses a left sidebar with sections for layout, appearance, built-in items, behavior, and system helpers. It exposes live controls for position, rows, bar size, icon size, item spacing, theme, auto-hide, Finder/Applications/Trash visibility, pinned app management, hidden app icon restore, activity mode, Accessibility status, and native Dock helpers.
 
-Drag app icons within the bar to reorder/pin them. While dragging, mbar stays open and shows a stable insertion marker for the drop position. Drag a pinned app icon out of the expanded interaction area to unpin it.
+Drag app icons within the bar to reorder them without pinning. While dragging, mbar stays open and shows a stable insertion marker for the drop position. Use an app icon's Options menu to keep it pinned; drag a pinned app icon out of the expanded interaction area to unpin it.
 
 After dropping, mbar preserves the revealed state instead of immediately hiding.
 

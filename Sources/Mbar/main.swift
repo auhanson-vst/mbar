@@ -41,6 +41,7 @@ struct Settings {
         static let showApplications = "showApplications"
         static let showTrash = "showTrash"
         static let pinnedBundleIDs = "pinnedBundleIDs"
+        static let appOrderBundleIDs = "appOrderBundleIDs"
         static let hiddenBundleIDs = "hiddenBundleIDs"
     }
 
@@ -125,6 +126,21 @@ struct Settings {
         set {
             let filtered = newValue.filter { showFinder || $0 != finderBundleID }
             UserDefaults.standard.set(Array(NSOrderedSet(array: filtered)) as? [String] ?? filtered, forKey: Key.pinnedBundleIDs)
+        }
+    }
+
+    static var appOrderBundleIDs: [String] {
+        get {
+            let saved = UserDefaults.standard.stringArray(forKey: Key.appOrderBundleIDs) ?? []
+            let filtered = saved.filter { showFinder || $0 != finderBundleID }
+            if filtered.count != saved.count {
+                UserDefaults.standard.set(Array(NSOrderedSet(array: filtered)) as? [String] ?? filtered, forKey: Key.appOrderBundleIDs)
+            }
+            return filtered
+        }
+        set {
+            let filtered = newValue.filter { showFinder || $0 != finderBundleID }
+            UserDefaults.standard.set(Array(NSOrderedSet(array: filtered)) as? [String] ?? filtered, forKey: Key.appOrderBundleIDs)
         }
     }
 
@@ -1630,6 +1646,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         guard pinnedBundleIDs.indices.contains(newIndex) else { return }
         pinnedBundleIDs.swapAt(index, newIndex)
         Settings.pinnedBundleIDs = pinnedBundleIDs
+        var appOrder = Settings.appOrderBundleIDs
+        if let orderIndex = appOrder.firstIndex(of: bundleID) {
+            let newOrderIndex = orderIndex + offset
+            if appOrder.indices.contains(newOrderIndex) {
+                appOrder.swapAt(orderIndex, newOrderIndex)
+            }
+            Settings.appOrderBundleIDs = appOrder
+        }
         refreshItemsPane()
     }
 
@@ -2033,29 +2057,24 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             .filter { !Settings.hiddenBundleIDs.contains($0) }
         var renderedBundleIDs = Set<String>()
         var renderedPIDs = Set<pid_t>()
-        var rebuiltAppOrder: [String] = []
-        for bundleID in pinnedIDs {
-            addPinnedItem(bundleID: bundleID)
-            rebuiltAppOrder.append(bundleID)
-            renderedBundleIDs.insert(bundleID)
-            if let pid = runningApps[bundleID]?.processIdentifier {
-                renderedPIDs.insert(pid)
-            }
-        }
-
-        for app in apps.sorted(by: appSort) {
-            guard shouldShow(app: app), !renderedPIDs.contains(app.processIdentifier) else { continue }
-            if let bundleID = app.bundleIdentifier, renderedBundleIDs.contains(bundleID) {
+        let runningBundleIDs = apps.sorted(by: appSort).compactMap(\.bundleIdentifier)
+        let defaultOrder = pinnedIDs + runningBundleIDs.filter { !pinnedIDs.contains($0) }
+        let savedOrder = Settings.appOrderBundleIDs
+        let orderedBundleIDs = savedOrder.filter { defaultOrder.contains($0) } + defaultOrder.filter { !savedOrder.contains($0) }
+        for bundleID in orderedBundleIDs {
+            guard !renderedBundleIDs.contains(bundleID) else { continue }
+            if let app = runningApps[bundleID] {
+                guard shouldShow(app: app), !renderedPIDs.contains(app.processIdentifier) else { continue }
+                addAppItem(app)
+                renderedPIDs.insert(app.processIdentifier)
+                renderedBundleIDs.insert(bundleID)
                 continue
             }
-            addAppItem(app)
-            renderedPIDs.insert(app.processIdentifier)
-            if let bundleID = app.bundleIdentifier {
-                renderedBundleIDs.insert(bundleID)
-                rebuiltAppOrder.append(bundleID)
-            }
+            guard pinnedIDs.contains(bundleID) else { continue }
+            addPinnedItem(bundleID: bundleID)
+            renderedBundleIDs.insert(bundleID)
         }
-        currentAppOrder = rebuiltAppOrder
+        currentAppOrder = orderedBundleIDs.filter { renderedBundleIDs.contains($0) }
 
         if Settings.showApplications || Settings.showTrash {
             addSeparator()
@@ -2453,11 +2472,11 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             return false
         }
 
-        var pins = currentAppOrder.filter { $0 != bundleID && (Settings.showFinder || $0 != finderBundleID) }
+        var appOrder = currentAppOrder.filter { $0 != bundleID && (Settings.showFinder || $0 != finderBundleID) }
         let insertionIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
-        pins.insert(bundleID, at: min(insertionIndex, pins.count))
+        appOrder.insert(bundleID, at: min(insertionIndex, appOrder.count))
         acceptedDropBundleIDs.insert(bundleID)
-        Settings.pinnedBundleIDs = pins
+        Settings.appOrderBundleIDs = appOrder
         AppDelegate.shared?.rebuildBarsInPlace()
         return true
     }
