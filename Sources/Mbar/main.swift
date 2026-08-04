@@ -2874,11 +2874,26 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     @objc private func menuHide(_ sender: NSMenuItem) {
         guard let app = sender.representedObject as? NSRunningApplication else { return }
+        let didChange: Bool
         if app.isHidden {
-            _ = app.unhide()
+            didChange = app.unhide()
         } else {
-            _ = app.hide()
+            didChange = app.hide()
         }
+        if !didChange, let bundleID = app.bundleIdentifier {
+            setHiddenState(!app.isHidden, for: bundleID)
+        }
+        AppDelegate.shared?.rebuildBarsInPlace()
+    }
+
+    private func setHiddenState(_ hidden: Bool, for bundleID: String) {
+        let escapedBundleID = bundleID.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "System Events"
+            set visible of first application process whose bundle identifier is "\(escapedBundleID)" to \(hidden ? "false" : "true")
+        end tell
+        """
+        runAppleScript(script)
     }
 
     @objc private func menuQuit(_ sender: NSMenuItem) {
