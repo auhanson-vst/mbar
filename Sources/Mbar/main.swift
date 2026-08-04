@@ -41,6 +41,7 @@ struct Settings {
         static let showApplications = "showApplications"
         static let showTrash = "showTrash"
         static let pinnedBundleIDs = "pinnedBundleIDs"
+        static let hiddenBundleIDs = "hiddenBundleIDs"
     }
 
     static var edge: Edge {
@@ -124,6 +125,15 @@ struct Settings {
         set {
             let filtered = newValue.filter { showFinder || $0 != finderBundleID }
             UserDefaults.standard.set(Array(NSOrderedSet(array: filtered)) as? [String] ?? filtered, forKey: Key.pinnedBundleIDs)
+        }
+    }
+
+    static var hiddenBundleIDs: [String] {
+        get {
+            UserDefaults.standard.stringArray(forKey: Key.hiddenBundleIDs) ?? []
+        }
+        set {
+            UserDefaults.standard.set(Array(NSOrderedSet(array: newValue)) as? [String] ?? newValue, forKey: Key.hiddenBundleIDs)
         }
     }
 }
@@ -1294,15 +1304,65 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         showTrashCheckbox.target = self
         showTrashCheckbox.action = #selector(specialItemVisibilityChanged(_:))
 
+        var rows = [
+            fullWidth(showFinderCheckbox),
+            fullWidth(showApplicationsCheckbox),
+            fullWidth(showTrashCheckbox)
+        ]
+        rows.append(fullWidth(hiddenAppsList()))
+
         return section(
             title: "Built-in Items",
-            detail: "Finder stays hidden by default, but you can show it if you want a fuller Dock-style strip.",
-            rows: [
-                fullWidth(showFinderCheckbox),
-                fullWidth(showApplicationsCheckbox),
-                fullWidth(showTrashCheckbox)
-            ]
+            detail: "Choose built-in items and restore any app icons hidden from mbar.",
+            rows: rows
         )
+    }
+
+    private func hiddenAppsList() -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = NSTextField(labelWithString: "Hidden App Icons")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        stack.addArrangedSubview(title)
+
+        let hiddenBundleIDs = Settings.hiddenBundleIDs
+        if hiddenBundleIDs.isEmpty {
+            let empty = NSTextField(labelWithString: "No hidden app icons.")
+            empty.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(empty)
+        } else {
+            for bundleID in hiddenBundleIDs {
+                stack.addArrangedSubview(hiddenAppRow(bundleID: bundleID))
+            }
+        }
+
+        return stack
+    }
+
+    private func hiddenAppRow(bundleID: String) -> NSView {
+        let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        let name = url?.deletingPathExtension().lastPathComponent ?? bundleID
+        let label = NSTextField(labelWithString: name)
+        label.lineBreakMode = .byTruncatingTail
+
+        let button = NSButton(title: "Unhide", target: self, action: #selector(unhideAppIcon(_:)))
+        button.identifier = NSUserInterfaceItemIdentifier(bundleID)
+
+        let stack = NSStackView(views: [label, button])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.distribution = .fill
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.widthAnchor.constraint(equalToConstant: 444),
+            button.widthAnchor.constraint(equalToConstant: 84)
+        ])
+        return stack
     }
 
     private func systemSection() -> NSView {
@@ -1486,6 +1546,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         Settings.showApplications = showApplicationsCheckbox.state == .on
         Settings.showTrash = showTrashCheckbox.state == .on
         refreshControls()
+        AppDelegate.shared?.rebuildBars()
+    }
+
+    @objc private func unhideAppIcon(_ sender: NSButton) {
+        guard let bundleID = sender.identifier?.rawValue else { return }
+        Settings.hiddenBundleIDs.removeAll { $0 == bundleID }
+        refreshControls()
+        selectPane(.items)
         AppDelegate.shared?.rebuildBars()
     }
 
@@ -1874,6 +1942,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         }
 
         let pinnedIDs = Settings.pinnedBundleIDs.filter { Settings.showFinder || $0 != finderBundleID }
+            .filter { !Settings.hiddenBundleIDs.contains($0) }
         var renderedBundleIDs = Set<String>()
         var renderedPIDs = Set<pid_t>()
         var rebuiltAppOrder: [String] = []
@@ -2175,6 +2244,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func addPinnedItem(bundleID: String) {
         guard Settings.showFinder || bundleID != finderBundleID else { return }
+        guard !Settings.hiddenBundleIDs.contains(bundleID) else { return }
         if let app = runningApps[bundleID] {
             addAppItem(app)
             return
@@ -2488,7 +2558,10 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func shouldShow(app: NSRunningApplication) -> Bool {
-        true
+        if let bundleID = app.bundleIdentifier, Settings.hiddenBundleIDs.contains(bundleID) {
+            return false
+        }
+        return true
     }
 
     private func appSort(_ lhs: NSRunningApplication, _ rhs: NSRunningApplication) -> Bool {
@@ -2553,6 +2626,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             } else {
                 addMenuItem(to: optionsMenu, title: "Keep in mbar", action: #selector(menuPin(_:)), representedObject: bundleID)
             }
+            addMenuItem(to: optionsMenu, title: "Hide Icon from mbar", action: #selector(menuHideIconFromMbar(_:)), representedObject: bundleID)
             if let url = app.bundleURL {
                 addMenuItem(to: optionsMenu, title: "Open at Login", action: #selector(menuOpenAtLogin(_:)), representedObject: url)
                 addMenuItem(to: optionsMenu, title: "Show in Finder", action: #selector(menuShowInFinder(_:)), representedObject: url)
@@ -2824,6 +2898,12 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     @objc private func menuUnpin(_ sender: NSMenuItem) {
         guard let bundleID = sender.representedObject as? String else { return }
         Settings.pinnedBundleIDs.removeAll { $0 == bundleID }
+        AppDelegate.shared?.rebuildBars()
+    }
+
+    @objc private func menuHideIconFromMbar(_ sender: NSMenuItem) {
+        guard let bundleID = sender.representedObject as? String else { return }
+        Settings.hiddenBundleIDs.append(bundleID)
         AppDelegate.shared?.rebuildBars()
     }
 
