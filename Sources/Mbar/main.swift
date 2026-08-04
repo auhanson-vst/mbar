@@ -2535,14 +2535,33 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
         addMenuItem(to: menu, title: "Activate", action: #selector(menuActivate(_:)), representedObject: app)
+        addMenuItem(to: menu, title: "Show All Windows", action: #selector(menuActivate(_:)), representedObject: app)
         addMenuItem(to: menu, title: app.isHidden ? "Unhide" : "Hide", action: #selector(menuHide(_:)), representedObject: app)
         menu.addItem(NSMenuItem.separator())
 
-        if let bundleID = app.bundleIdentifier, Settings.pinnedBundleIDs.contains(bundleID) {
-            addMenuItem(to: menu, title: "Unpin from mbar", action: #selector(menuUnpin(_:)), representedObject: bundleID)
-        } else if let bundleID = app.bundleIdentifier {
-            addMenuItem(to: menu, title: "Pin to mbar", action: #selector(menuPin(_:)), representedObject: bundleID)
+        let windowMenuItem = NSMenuItem(title: "Windows", action: nil, keyEquivalent: "")
+        let windowMenu = lazyWindowsMenu(for: app)
+        menu.setSubmenu(windowMenu, for: windowMenuItem)
+        menu.addItem(windowMenuItem)
+
+        if let bundleID = app.bundleIdentifier {
+            let optionsItem = NSMenuItem(title: "Options", action: nil, keyEquivalent: "")
+            let optionsMenu = NSMenu()
+            optionsMenu.autoenablesItems = false
+            if Settings.pinnedBundleIDs.contains(bundleID) {
+                addMenuItem(to: optionsMenu, title: "Remove from mbar", action: #selector(menuUnpin(_:)), representedObject: bundleID)
+            } else {
+                addMenuItem(to: optionsMenu, title: "Keep in mbar", action: #selector(menuPin(_:)), representedObject: bundleID)
+            }
+            if let url = app.bundleURL {
+                addMenuItem(to: optionsMenu, title: "Open at Login", action: #selector(menuOpenAtLogin(_:)), representedObject: url)
+                addMenuItem(to: optionsMenu, title: "Show in Finder", action: #selector(menuShowInFinder(_:)), representedObject: url)
+            }
+            menu.setSubmenu(optionsMenu, for: optionsItem)
+            menu.addItem(optionsItem)
         }
+
+        menu.addItem(NSMenuItem.separator())
         addMenuItem(to: menu, title: "Quit", action: #selector(menuQuit(_:)), representedObject: app)
         let forceQuitItem = NSMenuItem(title: "Force Quit", action: #selector(menuForceQuit(_:)), keyEquivalent: "")
         forceQuitItem.representedObject = app
@@ -2551,6 +2570,17 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         forceQuitItem.isAlternate = true
         forceQuitItem.keyEquivalentModifierMask = [.option]
         menu.addItem(forceQuitItem)
+        return menu
+    }
+
+    private func lazyWindowsMenu(for app: NSRunningApplication) -> NSMenu {
+        let menu = NSMenu(title: "mbar-windows")
+        menu.autoenablesItems = false
+        menu.delegate = self
+        let placeholder = NSMenuItem(title: "Loading Windows…", action: nil, keyEquivalent: "")
+        placeholder.representedObject = app
+        placeholder.isEnabled = false
+        menu.addItem(placeholder)
         return menu
     }
 
@@ -2605,7 +2635,16 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
         addMenuItem(to: menu, title: "Open", action: #selector(menuLaunchPinned(_:)), representedObject: bundleID)
-        addMenuItem(to: menu, title: "Unpin from mbar", action: #selector(menuUnpin(_:)), representedObject: bundleID)
+        let optionsItem = NSMenuItem(title: "Options", action: nil, keyEquivalent: "")
+        let optionsMenu = NSMenu()
+        optionsMenu.autoenablesItems = false
+        addMenuItem(to: optionsMenu, title: "Remove from mbar", action: #selector(menuUnpin(_:)), representedObject: bundleID)
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            addMenuItem(to: optionsMenu, title: "Open at Login", action: #selector(menuOpenAtLogin(_:)), representedObject: url)
+            addMenuItem(to: optionsMenu, title: "Show in Finder", action: #selector(menuShowInFinder(_:)), representedObject: url)
+        }
+        menu.setSubmenu(optionsMenu, for: optionsItem)
+        menu.addItem(optionsItem)
         return menu
     }
 
@@ -2723,6 +2762,31 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         scheduleHide()
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu.title == "mbar-windows",
+              let app = menu.items.first?.representedObject as? NSRunningApplication
+        else {
+            return
+        }
+
+        menu.removeAllItems()
+        let titles = windowTitles(for: app)
+        if titles.isEmpty {
+            let item = NSMenuItem(title: "No public windows", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+            return
+        }
+
+        for title in titles {
+            let item = NSMenuItem(title: title, action: #selector(menuActivate(_:)), keyEquivalent: "")
+            item.representedObject = app
+            item.target = self
+            item.isEnabled = true
+            menu.addItem(item)
+        }
+    }
+
     @objc private func menuActivate(_ sender: NSMenuItem) {
         guard let app = sender.representedObject as? NSRunningApplication else { return }
         activate(app)
@@ -2769,6 +2833,25 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
         else { return }
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
+    }
+
+    @objc private func menuShowInFinder(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    @objc private func menuOpenAtLogin(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        let name = url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let path = url.path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "System Events"
+            if not (exists login item "\(name)") then
+                make login item at end with properties {path:"\(path)", hidden:false}
+            end if
+        end tell
+        """
+        runAppleScript(script)
     }
 
     @objc private func menuOpenURL(_ sender: NSMenuItem) {
