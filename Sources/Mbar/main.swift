@@ -1,9 +1,65 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import UniformTypeIdentifiers
 
 let appDragPasteboardType = NSPasteboard.PasteboardType("dev.auhanson.mbar.bundle-id")
 let finderBundleID = "com.apple.finder"
+
+enum ShortcutKind: String, CaseIterable, Codable {
+    case website
+    case appLink
+    case application
+    case file
+    case folder
+
+    var displayName: String {
+        switch self {
+        case .website:
+            return "Website"
+        case .appLink:
+            return "App Shortcut"
+        case .application:
+            return "Application"
+        case .file:
+            return "File"
+        case .folder:
+            return "Folder"
+        }
+    }
+
+    var targetLabel: String {
+        switch self {
+        case .website:
+            return "Website URL"
+        case .appLink:
+            return "Shortcut URL"
+        case .application:
+            return "Application"
+        case .file:
+            return "File"
+        case .folder:
+            return "Folder"
+        }
+    }
+}
+
+struct CustomShortcutItem: Codable, Equatable {
+    var id: String
+    var title: String
+    var kind: ShortcutKind
+    var target: String
+    var iconBundleID: String?
+
+    var launchURL: URL? {
+        switch kind {
+        case .website, .appLink:
+            return URL(string: target)
+        case .application, .file, .folder:
+            return URL(fileURLWithPath: target)
+        }
+    }
+}
 
 enum Edge: String, CaseIterable {
     case bottom
@@ -43,6 +99,7 @@ struct Settings {
         static let pinnedBundleIDs = "pinnedBundleIDs"
         static let appOrderBundleIDs = "appOrderBundleIDs"
         static let hiddenBundleIDs = "hiddenBundleIDs"
+        static let customShortcuts = "customShortcuts"
     }
 
     static var edge: Edge {
@@ -150,6 +207,21 @@ struct Settings {
         }
         set {
             UserDefaults.standard.set(Array(NSOrderedSet(array: newValue)) as? [String] ?? newValue, forKey: Key.hiddenBundleIDs)
+        }
+    }
+
+    static var customShortcuts: [CustomShortcutItem] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: Key.customShortcuts),
+                  let shortcuts = try? JSONDecoder().decode([CustomShortcutItem].self, from: data)
+            else {
+                return []
+            }
+            return shortcuts
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            UserDefaults.standard.set(data, forKey: Key.customShortcuts)
         }
     }
 }
@@ -902,6 +974,293 @@ final class AccessibilityWindowCatalog {
     }
 }
 
+@MainActor
+final class ShortcutEditorWindowController: NSWindowController {
+    private let titleField = NSTextField()
+    private let kindPopup = NSPopUpButton()
+    private let targetField = NSTextField()
+    private let iconBundleField = NSTextField()
+    private let targetLabel = NSTextField(labelWithString: "")
+    private let errorLabel = NSTextField(labelWithString: "")
+    private let chooseButton = NSButton(title: "Choose…", target: nil, action: nil)
+    private let saveButton = NSButton(title: "Save", target: nil, action: nil)
+    private var editingShortcut: CustomShortcutItem?
+    private var completion: ((CustomShortcutItem?) -> Void)?
+
+    init(shortcut: CustomShortcutItem?, completion: @escaping (CustomShortcutItem?) -> Void) {
+        self.editingShortcut = shortcut
+        self.completion = completion
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 330),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = shortcut == nil ? "Add Shortcut" : "Edit Shortcut"
+        super.init(window: window)
+        buildContent()
+        populate(shortcut)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    private func buildContent() {
+        guard let contentView = window?.contentView else { return }
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let presetTitle = NSTextField(labelWithString: "Start with a preset or choose the target type.")
+        presetTitle.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(presetTitle)
+
+        let outlookButton = NSButton(title: "Outlook Calendar", target: self, action: #selector(useOutlookCalendarPreset(_:)))
+        let websiteButton = NSButton(title: "Website", target: self, action: #selector(useWebsitePreset(_:)))
+        let appButton = NSButton(title: "App", target: self, action: #selector(useAppPreset(_:)))
+        let presets = NSStackView(views: [outlookButton, websiteButton, appButton])
+        presets.orientation = .horizontal
+        presets.spacing = 8
+        stack.addArrangedSubview(presets)
+
+        kindPopup.addItems(withTitles: ShortcutKind.allCases.map(\.displayName))
+        kindPopup.target = self
+        kindPopup.action = #selector(kindChanged(_:))
+
+        chooseButton.target = self
+        chooseButton.action = #selector(chooseTarget(_:))
+
+        errorLabel.textColor = .systemRed
+        errorLabel.maximumNumberOfLines = 2
+        errorLabel.isHidden = true
+
+        stack.addArrangedSubview(row("Name", titleField))
+        stack.addArrangedSubview(row("Type", kindPopup))
+        stack.addArrangedSubview(row(targetLabel, targetField, trailing: chooseButton))
+        stack.addArrangedSubview(row("Icon app", iconBundleField))
+
+        let iconHelp = NSTextField(labelWithString: "Icon app is optional. Use a bundle ID like com.microsoft.Outlook to borrow an app icon.")
+        iconHelp.font = .systemFont(ofSize: 11)
+        iconHelp.textColor = .secondaryLabelColor
+        iconHelp.maximumNumberOfLines = 2
+        stack.addArrangedSubview(iconHelp)
+        stack.addArrangedSubview(errorLabel)
+
+        let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel(_:)))
+        saveButton.target = self
+        saveButton.action = #selector(save(_:))
+        saveButton.keyEquivalent = "\r"
+        let buttons = NSStackView(views: [NSView(), cancelButton, saveButton])
+        buttons.orientation = .horizontal
+        buttons.alignment = .centerY
+        buttons.distribution = .fill
+        buttons.spacing = 8
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            buttons.widthAnchor.constraint(equalToConstant: 484),
+            cancelButton.widthAnchor.constraint(equalToConstant: 84),
+            saveButton.widthAnchor.constraint(equalToConstant: 84)
+        ])
+        stack.addArrangedSubview(buttons)
+
+        contentView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        ])
+        updateKindState()
+    }
+
+    private func populate(_ shortcut: CustomShortcutItem?) {
+        guard let shortcut else {
+            useOutlookCalendarPreset(nil)
+            return
+        }
+        titleField.stringValue = shortcut.title
+        targetField.stringValue = shortcut.target
+        iconBundleField.stringValue = shortcut.iconBundleID ?? ""
+        kindPopup.selectItem(withTitle: shortcut.kind.displayName)
+        updateKindState()
+    }
+
+    private func row(_ title: String, _ control: NSView) -> NSView {
+        row(NSTextField(labelWithString: title), control)
+    }
+
+    private func row(_ label: NSTextField, _ control: NSView, trailing: NSView? = nil) -> NSView {
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        control.translatesAutoresizingMaskIntoConstraints = false
+        let views = trailing.map { [label, control, $0] } ?? [label, control]
+        let stack = NSStackView(views: views)
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.widthAnchor.constraint(equalToConstant: 484),
+            label.widthAnchor.constraint(equalToConstant: 86),
+            control.widthAnchor.constraint(equalToConstant: trailing == nil ? 388 : 290)
+        ])
+        if let trailing {
+            trailing.translatesAutoresizingMaskIntoConstraints = false
+            trailing.widthAnchor.constraint(equalToConstant: 88).isActive = true
+        }
+        return stack
+    }
+
+    private var selectedKind: ShortcutKind {
+        ShortcutKind.allCases[kindPopup.indexOfSelectedItem]
+    }
+
+    @objc private func kindChanged(_ sender: NSPopUpButton) {
+        updateKindState()
+    }
+
+    private func updateKindState() {
+        targetLabel.stringValue = selectedKind.targetLabel
+        chooseButton.isEnabled = selectedKind == .application || selectedKind == .file || selectedKind == .folder
+        switch selectedKind {
+        case .website:
+            targetField.placeholderString = "https://calendar.google.com/"
+        case .appLink:
+            targetField.placeholderString = "ms-outlook://events"
+        case .application:
+            targetField.placeholderString = "/Applications/App.app"
+        case .file:
+            targetField.placeholderString = "/Users/austin/Documents/file.pdf"
+        case .folder:
+            targetField.placeholderString = "/Users/austin/Downloads"
+        }
+    }
+
+    @objc private func useOutlookCalendarPreset(_ sender: Any?) {
+        titleField.stringValue = "Calendar"
+        kindPopup.selectItem(withTitle: ShortcutKind.appLink.displayName)
+        targetField.stringValue = "ms-outlook://events"
+        iconBundleField.stringValue = "com.microsoft.Outlook"
+        updateKindState()
+    }
+
+    @objc private func useWebsitePreset(_ sender: Any?) {
+        titleField.stringValue = "Website"
+        kindPopup.selectItem(withTitle: ShortcutKind.website.displayName)
+        targetField.stringValue = "https://"
+        iconBundleField.stringValue = ""
+        updateKindState()
+    }
+
+    @objc private func useAppPreset(_ sender: Any?) {
+        titleField.stringValue = "Application"
+        kindPopup.selectItem(withTitle: ShortcutKind.application.displayName)
+        targetField.stringValue = ""
+        iconBundleField.stringValue = ""
+        updateKindState()
+        chooseTarget(sender)
+    }
+
+    @objc private func chooseTarget(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = selectedKind == .folder
+        panel.canChooseFiles = selectedKind == .application || selectedKind == .file
+        panel.allowsMultipleSelection = false
+        if selectedKind == .application {
+            panel.allowedContentTypes = [.applicationBundle]
+            panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            targetField.stringValue = url.path
+            if titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || titleField.stringValue == "Application" {
+                titleField.stringValue = url.deletingPathExtension().lastPathComponent
+            }
+            if selectedKind == .application, let bundle = Bundle(url: url), let bundleID = bundle.bundleIdentifier {
+                iconBundleField.stringValue = bundleID
+            }
+        }
+    }
+
+    @objc private func cancel(_ sender: NSButton) {
+        finish(nil)
+    }
+
+    @objc private func save(_ sender: NSButton) {
+        let title = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target = targetField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let iconBundleID = iconBundleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            showError("Name is required.")
+            return
+        }
+        guard validate(target: target, kind: selectedKind) else { return }
+        let shortcut = CustomShortcutItem(
+            id: editingShortcut?.id ?? UUID().uuidString,
+            title: title,
+            kind: selectedKind,
+            target: target,
+            iconBundleID: iconBundleID.isEmpty ? nil : iconBundleID
+        )
+        finish(shortcut)
+    }
+
+    private func validate(target: String, kind: ShortcutKind) -> Bool {
+        guard !target.isEmpty else {
+            showError("Target is required.")
+            return false
+        }
+        switch kind {
+        case .website:
+            guard let url = URL(string: target), ["http", "https"].contains(url.scheme?.lowercased()) else {
+                showError("Website shortcuts need an http or https URL.")
+                return false
+            }
+        case .appLink:
+            guard let url = URL(string: target), url.scheme != nil else {
+                showError("App shortcuts need a valid URL scheme, like ms-outlook://events.")
+                return false
+            }
+        case .application:
+            guard target.hasSuffix(".app"), FileManager.default.fileExists(atPath: target) else {
+                showError("Choose an installed .app bundle.")
+                return false
+            }
+        case .file:
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: target, isDirectory: &isDirectory), !isDirectory.boolValue else {
+                showError("Choose an existing file.")
+                return false
+            }
+        case .folder:
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: target, isDirectory: &isDirectory), isDirectory.boolValue else {
+                showError("Choose an existing folder.")
+                return false
+            }
+        }
+        errorLabel.isHidden = true
+        return true
+    }
+
+    private func showError(_ message: String) {
+        errorLabel.stringValue = message
+        errorLabel.isHidden = false
+    }
+
+    private func finish(_ shortcut: CustomShortcutItem?) {
+        if let sheet = window, let parent = sheet.sheetParent {
+            parent.endSheet(sheet)
+        }
+        completion?(shortcut)
+        completion = nil
+    }
+}
+
 final class DockBadgeCatalog {
     static func badgeTexts() -> [String: String] {
         guard AccessibilityWindowCatalog.isTrusted,
@@ -1083,6 +1442,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let contentStack = NSStackView()
     private var paneButtons: [Pane: NSButton] = [:]
     private var selectedPane: Pane = .layout
+    private var shortcutEditor: ShortcutEditorWindowController?
     var onClose: (() -> Void)?
 
     init() {
@@ -1332,13 +1692,82 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             fullWidth(showTrashCheckbox)
         ]
         rows.append(fullWidth(pinnedAppsList()))
+        rows.append(fullWidth(shortcutsList()))
         rows.append(fullWidth(hiddenAppsList()))
 
         return section(
             title: "Built-in Items",
-            detail: "Choose built-in items and restore any app icons hidden from mbar.",
+            detail: "Choose built-in items, add custom shortcuts, and restore app icons hidden from mbar.",
             rows: rows
         )
+    }
+
+    private func shortcutsList() -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = NSTextField(labelWithString: "Shortcuts")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        let detail = NSTextField(labelWithString: "Add visual launchers for websites, files, folders, apps, or app deep links like Outlook Calendar.")
+        detail.font = .systemFont(ofSize: 11)
+        detail.textColor = .secondaryLabelColor
+        detail.maximumNumberOfLines = 2
+        let addButton = NSButton(title: "Add Shortcut…", target: self, action: #selector(addShortcut(_:)))
+
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(detail)
+        stack.addArrangedSubview(addButton)
+
+        let shortcuts = Settings.customShortcuts
+        if shortcuts.isEmpty {
+            let empty = NSTextField(labelWithString: "No custom shortcuts.")
+            empty.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(empty)
+        } else {
+            for (index, shortcut) in shortcuts.enumerated() {
+                stack.addArrangedSubview(shortcutRow(shortcut: shortcut, index: index, count: shortcuts.count))
+            }
+        }
+
+        return stack
+    }
+
+    private func shortcutRow(shortcut: CustomShortcutItem, index: Int, count: Int) -> NSView {
+        let label = NSTextField(labelWithString: "\(shortcut.title) — \(shortcut.kind.displayName)")
+        label.lineBreakMode = .byTruncatingTail
+        label.toolTip = shortcut.target
+
+        let upButton = NSButton(title: "↑", target: self, action: #selector(moveShortcutUp(_:)))
+        upButton.identifier = NSUserInterfaceItemIdentifier(shortcut.id)
+        upButton.isEnabled = index > 0
+
+        let downButton = NSButton(title: "↓", target: self, action: #selector(moveShortcutDown(_:)))
+        downButton.identifier = NSUserInterfaceItemIdentifier(shortcut.id)
+        downButton.isEnabled = index < count - 1
+
+        let editButton = NSButton(title: "Edit", target: self, action: #selector(editShortcut(_:)))
+        editButton.identifier = NSUserInterfaceItemIdentifier(shortcut.id)
+
+        let removeButton = NSButton(title: "Remove", target: self, action: #selector(removeShortcut(_:)))
+        removeButton.identifier = NSUserInterfaceItemIdentifier(shortcut.id)
+
+        let stack = NSStackView(views: [label, upButton, downButton, editButton, removeButton])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.distribution = .fill
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.widthAnchor.constraint(equalToConstant: 444),
+            upButton.widthAnchor.constraint(equalToConstant: 32),
+            downButton.widthAnchor.constraint(equalToConstant: 32),
+            editButton.widthAnchor.constraint(equalToConstant: 58),
+            removeButton.widthAnchor.constraint(equalToConstant: 76)
+        ])
+        return stack
     }
 
     private func pinnedAppsList() -> NSView {
@@ -1667,6 +2096,63 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         refreshControls()
         selectPane(.items)
         AppDelegate.shared?.rebuildBars()
+    }
+
+    @objc private func addShortcut(_ sender: NSButton) {
+        showShortcutEditor(shortcut: nil)
+    }
+
+    @objc private func editShortcut(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue,
+              let shortcut = Settings.customShortcuts.first(where: { $0.id == id })
+        else { return }
+        showShortcutEditor(shortcut: shortcut)
+    }
+
+    private func showShortcutEditor(shortcut: CustomShortcutItem?) {
+        let editor = ShortcutEditorWindowController(shortcut: shortcut) { [weak self] savedShortcut in
+            guard let self else { return }
+            self.shortcutEditor = nil
+            guard let savedShortcut else { return }
+            var shortcuts = Settings.customShortcuts
+            if let index = shortcuts.firstIndex(where: { $0.id == savedShortcut.id }) {
+                shortcuts[index] = savedShortcut
+            } else {
+                shortcuts.append(savedShortcut)
+            }
+            Settings.customShortcuts = shortcuts
+            self.refreshItemsPane()
+        }
+        shortcutEditor = editor
+        if let window, let sheet = editor.window {
+            window.beginSheet(sheet)
+        }
+    }
+
+    @objc private func moveShortcutUp(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        moveShortcut(id: id, offset: -1)
+    }
+
+    @objc private func moveShortcutDown(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        moveShortcut(id: id, offset: 1)
+    }
+
+    private func moveShortcut(id: String, offset: Int) {
+        var shortcuts = Settings.customShortcuts
+        guard let index = shortcuts.firstIndex(where: { $0.id == id }) else { return }
+        let newIndex = index + offset
+        guard shortcuts.indices.contains(newIndex) else { return }
+        shortcuts.swapAt(index, newIndex)
+        Settings.customShortcuts = shortcuts
+        refreshItemsPane()
+    }
+
+    @objc private func removeShortcut(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        Settings.customShortcuts.removeAll { $0.id == id }
+        refreshItemsPane()
     }
 
     @objc private func unhideAppIcon(_ sender: NSButton) {
@@ -2079,7 +2565,9 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         let defaultOrder = pinnedIDs + runningBundleIDs.filter { !pinnedIDs.contains($0) }
         let savedOrder = Settings.appOrderBundleIDs
         let orderedBundleIDs = savedOrder.filter { defaultOrder.contains($0) } + defaultOrder.filter { !savedOrder.contains($0) }
+        let shortcutIconBundleIDs = Set(Settings.customShortcuts.compactMap(\.iconBundleID))
         let missingMetadata = Set(orderedBundleIDs.filter { AppDelegate.shared?.metadata(for: $0) == nil })
+            .union(shortcutIconBundleIDs.filter { AppDelegate.shared?.metadata(for: $0) == nil })
         AppDelegate.shared?.schedulePresentationRefresh(for: missingMetadata, refreshBadges: false)
         for bundleID in orderedBundleIDs {
             guard !renderedBundleIDs.contains(bundleID) else { continue }
@@ -2095,6 +2583,10 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             renderedBundleIDs.insert(bundleID)
         }
         currentAppOrder = orderedBundleIDs.filter { renderedBundleIDs.contains($0) }
+
+        for shortcut in Settings.customShortcuts {
+            addShortcutItem(shortcut)
+        }
 
         if Settings.showApplications || Settings.showTrash {
             addSeparator()
@@ -2367,6 +2859,37 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         let button = TaskbarItemView(title: "Applications", image: image, bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openStartMenu(_:)))
         constrain(button)
         stackView.addArrangedSubview(button)
+    }
+
+    private func addShortcutItem(_ shortcut: CustomShortcutItem) {
+        let icon = shortcutIcon(for: shortcut)
+        icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
+        let button = TaskbarItemView(title: shortcut.title, image: icon, bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openShortcut(_:)))
+        button.identifier = NSUserInterfaceItemIdentifier(shortcut.id)
+        button.menu = shortcutMenu(shortcut)
+        constrain(button)
+        stackView.addArrangedSubview(button)
+    }
+
+    private func shortcutIcon(for shortcut: CustomShortcutItem) -> NSImage? {
+        if let bundleID = shortcut.iconBundleID,
+           let icon = AppDelegate.shared?.metadata(for: bundleID)?.icon?.copy() as? NSImage {
+            return icon
+        }
+        let symbolName: String
+        switch shortcut.kind {
+        case .website:
+            symbolName = "globe"
+        case .appLink:
+            symbolName = "link"
+        case .application:
+            symbolName = "app"
+        case .file:
+            symbolName = "doc"
+        case .folder:
+            symbolName = "folder"
+        }
+        return NSImage(systemSymbolName: symbolName, accessibilityDescription: shortcut.title)
     }
 
     private func addPinnedItem(bundleID: String) {
@@ -2723,6 +3246,13 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
     }
 
+    @objc private func openShortcut(_ sender: TaskbarItemView) {
+        guard let id = sender.identifier?.rawValue,
+              let shortcut = Settings.customShortcuts.first(where: { $0.id == id })
+        else { return }
+        launch(shortcut)
+    }
+
     @objc private func openStartMenu(_ sender: NSButton) {
         applicationGridPanel.show(apps: AppDelegate.shared?.applicationURLs() ?? [], relativeTo: sender) { url in
             NSWorkspace.shared.open(url)
@@ -2846,6 +3376,20 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             addMenuItem(to: optionsMenu, title: "Open at Login", action: #selector(menuOpenAtLogin(_:)), representedObject: url)
             addMenuItem(to: optionsMenu, title: "Show in Finder", action: #selector(menuShowInFinder(_:)), representedObject: url)
         }
+        menu.setSubmenu(optionsMenu, for: optionsItem)
+        menu.addItem(optionsItem)
+        return menu
+    }
+
+    private func shortcutMenu(_ shortcut: CustomShortcutItem) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        addMenuItem(to: menu, title: "Open", action: #selector(menuOpenShortcut(_:)), representedObject: shortcut.id)
+        let optionsItem = NSMenuItem(title: "Options", action: nil, keyEquivalent: "")
+        let optionsMenu = NSMenu()
+        optionsMenu.autoenablesItems = false
+        addMenuItem(to: optionsMenu, title: "Edit Shortcut…", action: #selector(menuEditShortcut(_:)), representedObject: shortcut.id)
+        addMenuItem(to: optionsMenu, title: "Remove from mbar", action: #selector(menuRemoveShortcut(_:)), representedObject: shortcut.id)
         menu.setSubmenu(optionsMenu, for: optionsItem)
         menu.addItem(optionsItem)
         return menu
@@ -3057,6 +3601,32 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
         else { return }
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
+    }
+
+    @objc private func menuOpenShortcut(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let shortcut = Settings.customShortcuts.first(where: { $0.id == id })
+        else { return }
+        launch(shortcut)
+    }
+
+    @objc private func menuEditShortcut(_ sender: NSMenuItem) {
+        AppDelegate.shared?.showSettings()
+    }
+
+    @objc private func menuRemoveShortcut(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        Settings.customShortcuts.removeAll { $0.id == id }
+        AppDelegate.shared?.rebuildBars()
+    }
+
+    private func launch(_ shortcut: CustomShortcutItem) {
+        guard let url = shortcut.launchURL else { return }
+        if shortcut.kind == .application {
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
+        } else {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc private func menuShowInFinder(_ sender: NSMenuItem) {
