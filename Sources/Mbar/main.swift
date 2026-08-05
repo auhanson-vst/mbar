@@ -20,6 +20,7 @@ enum TaskbarDragItem: Hashable {
         } else {
             return nil
         }
+
     }
 
     var rawValue: String {
@@ -70,12 +71,73 @@ enum ShortcutKind: String, CaseIterable, Codable {
     }
 }
 
+enum ShortcutIconChoice: String, CaseIterable {
+    case automatic
+    case appIcon
+    case outlookCalendar
+    case calendar
+    case website
+    case link
+    case application
+    case file
+    case folder
+    case customImage
+
+    var displayName: String {
+        switch self {
+        case .automatic:
+            return "Automatic"
+        case .appIcon:
+            return "App Icon"
+        case .outlookCalendar:
+            return "Outlook Calendar"
+        case .calendar:
+            return "Calendar"
+        case .website:
+            return "Website"
+        case .link:
+            return "Link"
+        case .application:
+            return "Application"
+        case .file:
+            return "File"
+        case .folder:
+            return "Folder"
+        case .customImage:
+            return "Custom Image"
+        }
+    }
+
+    var symbolName: String? {
+        switch self {
+        case .automatic, .appIcon, .customImage:
+            return nil
+        case .outlookCalendar:
+            return "mbar.outlook.calendar"
+        case .calendar:
+            return "calendar"
+        case .website:
+            return "globe"
+        case .link:
+            return "link"
+        case .application:
+            return "app"
+        case .file:
+            return "doc"
+        case .folder:
+            return "folder"
+        }
+    }
+}
+
 struct CustomShortcutItem: Codable, Equatable {
     var id: String
     var title: String
     var kind: ShortcutKind
     var target: String
     var iconBundleID: String?
+    var iconSymbolName: String?
+    var iconFilePath: String?
 
     var launchURL: URL? {
         switch kind {
@@ -1045,10 +1107,13 @@ final class ShortcutEditorWindowController: NSWindowController {
     private let titleField = NSTextField()
     private let kindPopup = NSPopUpButton()
     private let targetField = NSTextField()
+    private let iconPopup = NSPopUpButton()
     private let iconBundleField = NSTextField()
+    private let iconFileField = NSTextField()
     private let targetLabel = NSTextField(labelWithString: "")
     private let errorLabel = NSTextField(labelWithString: "")
     private let chooseButton = NSButton(title: "Choose…", target: nil, action: nil)
+    private let chooseIconButton = NSButton(title: "Choose…", target: nil, action: nil)
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private var editingShortcut: CustomShortcutItem?
     private var completion: ((CustomShortcutItem?) -> Void)?
@@ -1057,7 +1122,7 @@ final class ShortcutEditorWindowController: NSWindowController {
         self.editingShortcut = shortcut
         self.completion = completion
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 330),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 430),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
@@ -1097,9 +1162,14 @@ final class ShortcutEditorWindowController: NSWindowController {
         kindPopup.addItems(withTitles: ShortcutKind.allCases.map(\.displayName))
         kindPopup.target = self
         kindPopup.action = #selector(kindChanged(_:))
+        iconPopup.addItems(withTitles: ShortcutIconChoice.allCases.map(\.displayName))
+        iconPopup.target = self
+        iconPopup.action = #selector(iconChanged(_:))
 
         chooseButton.target = self
         chooseButton.action = #selector(chooseTarget(_:))
+        chooseIconButton.target = self
+        chooseIconButton.action = #selector(chooseIconFile(_:))
 
         errorLabel.textColor = .systemRed
         errorLabel.maximumNumberOfLines = 2
@@ -1108,9 +1178,11 @@ final class ShortcutEditorWindowController: NSWindowController {
         stack.addArrangedSubview(row("Name", titleField))
         stack.addArrangedSubview(row("Type", kindPopup))
         stack.addArrangedSubview(row(targetLabel, targetField, trailing: chooseButton))
+        stack.addArrangedSubview(row("Icon", iconPopup, trailing: chooseIconButton))
         stack.addArrangedSubview(row("Icon app", iconBundleField))
+        stack.addArrangedSubview(row("Icon file", iconFileField))
 
-        let iconHelp = NSTextField(labelWithString: "Icon app is optional. Use a bundle ID like com.microsoft.Outlook to borrow an app icon.")
+        let iconHelp = NSTextField(labelWithString: "Use Automatic for the default, App Icon with a bundle ID like com.microsoft.Outlook, a built-in symbol, or a custom image file.")
         iconHelp.font = .systemFont(ofSize: 11)
         iconHelp.textColor = .secondaryLabelColor
         iconHelp.maximumNumberOfLines = 2
@@ -1142,6 +1214,7 @@ final class ShortcutEditorWindowController: NSWindowController {
             stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         ])
         updateKindState()
+        updateIconState()
     }
 
     private func populate(_ shortcut: CustomShortcutItem?) {
@@ -1152,12 +1225,19 @@ final class ShortcutEditorWindowController: NSWindowController {
         titleField.stringValue = shortcut.title
         targetField.stringValue = shortcut.target
         iconBundleField.stringValue = shortcut.iconBundleID ?? ""
+        iconFileField.stringValue = shortcut.iconFilePath ?? ""
         kindPopup.selectItem(withTitle: shortcut.kind.displayName)
+        iconPopup.selectItem(withTitle: iconChoice(for: shortcut).displayName)
         updateKindState()
+        updateIconState()
     }
 
     private func row(_ title: String, _ control: NSView) -> NSView {
         row(NSTextField(labelWithString: title), control)
+    }
+
+    private func row(_ title: String, _ control: NSView, trailing: NSView) -> NSView {
+        row(NSTextField(labelWithString: title), control, trailing: trailing)
     }
 
     private func row(_ label: NSTextField, _ control: NSView, trailing: NSView? = nil) -> NSView {
@@ -1186,8 +1266,30 @@ final class ShortcutEditorWindowController: NSWindowController {
         ShortcutKind.allCases[kindPopup.indexOfSelectedItem]
     }
 
+    private var selectedIconChoice: ShortcutIconChoice {
+        ShortcutIconChoice.allCases[iconPopup.indexOfSelectedItem]
+    }
+
+    private func iconChoice(for shortcut: CustomShortcutItem) -> ShortcutIconChoice {
+        if shortcut.iconFilePath != nil {
+            return .customImage
+        }
+        if shortcut.iconBundleID != nil, shortcut.iconSymbolName == nil {
+            return .appIcon
+        }
+        if let symbolName = shortcut.iconSymbolName,
+           let choice = ShortcutIconChoice.allCases.first(where: { $0.symbolName == symbolName }) {
+            return choice
+        }
+        return .automatic
+    }
+
     @objc private func kindChanged(_ sender: NSPopUpButton) {
         updateKindState()
+    }
+
+    @objc private func iconChanged(_ sender: NSPopUpButton) {
+        updateIconState()
     }
 
     private func updateKindState() {
@@ -1207,12 +1309,24 @@ final class ShortcutEditorWindowController: NSWindowController {
         }
     }
 
+    private func updateIconState() {
+        let choice = selectedIconChoice
+        iconBundleField.isEnabled = choice == .appIcon
+        iconFileField.isEnabled = choice == .customImage
+        chooseIconButton.isEnabled = choice == .customImage
+        iconBundleField.textColor = choice == .appIcon ? .textColor : .secondaryLabelColor
+        iconFileField.textColor = choice == .customImage ? .textColor : .secondaryLabelColor
+    }
+
     @objc private func useOutlookCalendarPreset(_ sender: Any?) {
         titleField.stringValue = "Calendar"
         kindPopup.selectItem(withTitle: ShortcutKind.appLink.displayName)
         targetField.stringValue = "mbar://outlook/calendar"
         iconBundleField.stringValue = "com.microsoft.Outlook"
+        iconFileField.stringValue = ""
+        iconPopup.selectItem(withTitle: ShortcutIconChoice.outlookCalendar.displayName)
         updateKindState()
+        updateIconState()
     }
 
     @objc private func useWebsitePreset(_ sender: Any?) {
@@ -1220,7 +1334,10 @@ final class ShortcutEditorWindowController: NSWindowController {
         kindPopup.selectItem(withTitle: ShortcutKind.website.displayName)
         targetField.stringValue = "https://"
         iconBundleField.stringValue = ""
+        iconFileField.stringValue = ""
+        iconPopup.selectItem(withTitle: ShortcutIconChoice.website.displayName)
         updateKindState()
+        updateIconState()
     }
 
     @objc private func useAppPreset(_ sender: Any?) {
@@ -1228,7 +1345,10 @@ final class ShortcutEditorWindowController: NSWindowController {
         kindPopup.selectItem(withTitle: ShortcutKind.application.displayName)
         targetField.stringValue = ""
         iconBundleField.stringValue = ""
+        iconFileField.stringValue = ""
+        iconPopup.selectItem(withTitle: ShortcutIconChoice.appIcon.displayName)
         updateKindState()
+        updateIconState()
         chooseTarget(sender)
     }
 
@@ -1248,7 +1368,22 @@ final class ShortcutEditorWindowController: NSWindowController {
             }
             if selectedKind == .application, let bundle = Bundle(url: url), let bundleID = bundle.bundleIdentifier {
                 iconBundleField.stringValue = bundleID
+                iconPopup.selectItem(withTitle: ShortcutIconChoice.appIcon.displayName)
+                updateIconState()
             }
+        }
+    }
+
+    @objc private func chooseIconFile(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        if panel.runModal() == .OK, let url = panel.url {
+            iconFileField.stringValue = url.path
+            iconPopup.selectItem(withTitle: ShortcutIconChoice.customImage.displayName)
+            updateIconState()
         }
     }
 
@@ -1260,6 +1395,7 @@ final class ShortcutEditorWindowController: NSWindowController {
         let title = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let target = targetField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let iconBundleID = iconBundleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let iconFilePath = iconFileField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else {
             showError("Name is required.")
             return
@@ -1270,7 +1406,9 @@ final class ShortcutEditorWindowController: NSWindowController {
             title: title,
             kind: selectedKind,
             target: target,
-            iconBundleID: iconBundleID.isEmpty ? nil : iconBundleID
+            iconBundleID: selectedIconChoice == .appIcon && !iconBundleID.isEmpty ? iconBundleID : nil,
+            iconSymbolName: selectedIconChoice.symbolName,
+            iconFilePath: selectedIconChoice == .customImage && !iconFilePath.isEmpty ? iconFilePath : nil
         )
         finish(shortcut)
     }
@@ -2668,7 +2806,9 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             }
             return nil
         }
-        let shortcutIconBundleIDs = Set(Settings.customShortcuts.compactMap(\.iconBundleID))
+        let shortcutIconBundleIDs = Set(Settings.customShortcuts.compactMap { shortcut in
+            shortcut.iconSymbolName == nil && shortcut.iconFilePath == nil ? shortcut.iconBundleID : nil
+        })
         let missingMetadata = Set(orderedBundleIDs.filter { AppDelegate.shared?.metadata(for: $0) == nil })
             .union(shortcutIconBundleIDs.filter { AppDelegate.shared?.metadata(for: $0) == nil })
         AppDelegate.shared?.schedulePresentationRefresh(for: missingMetadata, refreshBadges: false)
@@ -2988,6 +3128,17 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func shortcutIcon(for shortcut: CustomShortcutItem) -> NSImage? {
+        if let iconFilePath = shortcut.iconFilePath,
+           let icon = NSImage(contentsOfFile: iconFilePath) {
+            return icon
+        }
+        if shortcut.iconSymbolName == ShortcutIconChoice.outlookCalendar.symbolName {
+            return outlookCalendarIcon()
+        }
+        if let symbolName = shortcut.iconSymbolName,
+           let icon = NSImage(systemSymbolName: symbolName, accessibilityDescription: shortcut.title) {
+            return icon
+        }
         if let bundleID = shortcut.iconBundleID,
            let icon = AppDelegate.shared?.metadata(for: bundleID)?.icon?.copy() as? NSImage {
             return icon
@@ -3006,6 +3157,41 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             symbolName = "folder"
         }
         return NSImage(systemSymbolName: symbolName, accessibilityDescription: shortcut.title)
+    }
+
+    private func outlookCalendarIcon() -> NSImage {
+        let size = NSSize(width: 64, height: 64)
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        let bodyRect = NSRect(x: 8, y: 6, width: 48, height: 52)
+        NSColor(calibratedRed: 0.0, green: 0.35, blue: 0.75, alpha: 1).setFill()
+        NSBezierPath(roundedRect: bodyRect, xRadius: 12, yRadius: 12).fill()
+
+        NSColor(calibratedRed: 0.0, green: 0.48, blue: 0.95, alpha: 1).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 8, y: 38, width: 48, height: 20), xRadius: 12, yRadius: 12).fill()
+
+        NSColor.white.setFill()
+        NSBezierPath(roundedRect: NSRect(x: 14, y: 12, width: 36, height: 30), xRadius: 5, yRadius: 5).fill()
+
+        NSColor(calibratedRed: 0.0, green: 0.35, blue: 0.75, alpha: 1).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 18, y: 29, width: 6, height: 6), xRadius: 1.5, yRadius: 1.5).fill()
+        NSBezierPath(roundedRect: NSRect(x: 29, y: 29, width: 6, height: 6), xRadius: 1.5, yRadius: 1.5).fill()
+        NSBezierPath(roundedRect: NSRect(x: 40, y: 29, width: 6, height: 6), xRadius: 1.5, yRadius: 1.5).fill()
+        NSBezierPath(roundedRect: NSRect(x: 18, y: 18, width: 6, height: 6), xRadius: 1.5, yRadius: 1.5).fill()
+        NSBezierPath(roundedRect: NSRect(x: 29, y: 18, width: 6, height: 6), xRadius: 1.5, yRadius: 1.5).fill()
+
+        let badgeRect = NSRect(x: 2, y: 20, width: 28, height: 28)
+        NSColor(calibratedRed: 0.0, green: 0.22, blue: 0.55, alpha: 1).setFill()
+        NSBezierPath(roundedRect: badgeRect, xRadius: 7, yRadius: 7).fill()
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 18, weight: .bold),
+            .foregroundColor: NSColor.white
+        ]
+        NSString(string: "O").draw(in: NSRect(x: 8, y: 23, width: 18, height: 20), withAttributes: attributes)
+
+        image.unlockFocus()
+        return image
     }
 
     private func addPinnedItem(bundleID: String) {
