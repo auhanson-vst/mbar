@@ -6,6 +6,32 @@ import UniformTypeIdentifiers
 let appDragPasteboardType = NSPasteboard.PasteboardType("dev.auhanson.mbar.bundle-id")
 let finderBundleID = "com.apple.finder"
 
+enum TaskbarDragItem: Hashable {
+    case app(String)
+    case shortcut(String)
+
+    init?(rawValue: String) {
+        if rawValue.hasPrefix("app:") {
+            self = .app(String(rawValue.dropFirst(4)))
+        } else if rawValue.hasPrefix("shortcut:") {
+            self = .shortcut(String(rawValue.dropFirst(9)))
+        } else if !rawValue.isEmpty {
+            self = .app(rawValue)
+        } else {
+            return nil
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .app(let bundleID):
+            return "app:\(bundleID)"
+        case .shortcut(let id):
+            return "shortcut:\(id)"
+        }
+    }
+}
+
 enum ShortcutKind: String, CaseIterable, Codable {
     case website
     case appLink
@@ -252,8 +278,8 @@ struct ProcessSample {
 final class HoverView: NSView {
     var onEnter: (() -> Void)?
     var onExit: (() -> Void)?
-    var onDropBundleID: ((String, CGPoint) -> Bool)?
-    var onDragBundleID: ((String, CGPoint) -> Void)?
+    var onDropItem: ((TaskbarDragItem, CGPoint) -> Bool)?
+    var onDragItem: ((TaskbarDragItem, CGPoint) -> Void)?
     var onMenu: (() -> NSMenu)?
 
     override func updateTrackingAreas() {
@@ -280,12 +306,12 @@ final class HoverView: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        sender.draggingPasteboard.string(forType: appDragPasteboardType) == nil ? [] : .move
+        dragItem(from: sender) == nil ? [] : .move
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let bundleID = sender.draggingPasteboard.string(forType: appDragPasteboardType) else { return [] }
-        onDragBundleID?(bundleID, convert(sender.draggingLocation, from: nil))
+        guard let item = dragItem(from: sender) else { return [] }
+        onDragItem?(item, convert(sender.draggingLocation, from: nil))
         return .move
     }
 
@@ -294,19 +320,23 @@ final class HoverView: NSView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let bundleID = sender.draggingPasteboard.string(forType: appDragPasteboardType) else { return false }
-        return onDropBundleID?(bundleID, convert(sender.draggingLocation, from: nil)) ?? false
+        guard let item = dragItem(from: sender) else { return false }
+        return onDropItem?(item, convert(sender.draggingLocation, from: nil)) ?? false
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         onMenu?()
     }
+
+    private func dragItem(from sender: NSDraggingInfo) -> TaskbarDragItem? {
+        sender.draggingPasteboard.string(forType: appDragPasteboardType).flatMap(TaskbarDragItem.init(rawValue:))
+    }
 }
 
 @MainActor
 final class DockBackgroundView: NSVisualEffectView {
-    var onDropBundleID: ((String, CGPoint) -> Bool)?
-    var onDragBundleID: ((String, CGPoint) -> Void)?
+    var onDropItem: ((TaskbarDragItem, CGPoint) -> Bool)?
+    var onDragItem: ((TaskbarDragItem, CGPoint) -> Void)?
     var onMenu: (() -> NSMenu)?
     private var glassCornerRadius: CGFloat = 0
     private var usesRoundedMask = false
@@ -346,22 +376,26 @@ final class DockBackgroundView: NSVisualEffectView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        sender.draggingPasteboard.string(forType: appDragPasteboardType) == nil ? [] : .move
+        dragItem(from: sender) == nil ? [] : .move
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let bundleID = sender.draggingPasteboard.string(forType: appDragPasteboardType) else { return [] }
-        onDragBundleID?(bundleID, convert(sender.draggingLocation, from: nil))
+        guard let item = dragItem(from: sender) else { return [] }
+        onDragItem?(item, convert(sender.draggingLocation, from: nil))
         return .move
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let bundleID = sender.draggingPasteboard.string(forType: appDragPasteboardType) else { return false }
-        return onDropBundleID?(bundleID, convert(sender.draggingLocation, from: nil)) ?? false
+        guard let item = dragItem(from: sender) else { return false }
+        return onDropItem?(item, convert(sender.draggingLocation, from: nil)) ?? false
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         onMenu?()
+    }
+
+    private func dragItem(from sender: NSDraggingInfo) -> TaskbarDragItem? {
+        sender.draggingPasteboard.string(forType: appDragPasteboardType).flatMap(TaskbarDragItem.init(rawValue:))
     }
 }
 
@@ -2210,6 +2244,7 @@ final class TaskbarIconCell: NSButtonCell {
 @MainActor
 final class TaskbarItemView: NSButton, NSDraggingSource {
     let representedBundleID: String?
+    let representedShortcutID: String?
     let representedPID: pid_t?
     private let displayTitle: String
     private let activeIndicator = CALayer()
@@ -2220,12 +2255,13 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     private let badgeText: String?
     private var mouseDownEvent: NSEvent?
     var onDragStarted: (() -> Void)?
-    var onDragFinished: ((String, Bool) -> Void)?
+    var onDragFinished: ((TaskbarDragItem, Bool) -> Void)?
     var onHoverStarted: ((TaskbarItemView) -> Void)?
     var onHoverEnded: (() -> Void)?
 
-    init(title: String, image: NSImage?, bundleID: String?, pid: pid_t?, isActive: Bool = false, isRunning: Bool = false, isHidden: Bool = false, attention: Bool = false, badgeText: String? = nil, target: AnyObject?, action: Selector?) {
+    init(title: String, image: NSImage?, bundleID: String?, shortcutID: String? = nil, pid: pid_t?, isActive: Bool = false, isRunning: Bool = false, isHidden: Bool = false, attention: Bool = false, badgeText: String? = nil, target: AnyObject?, action: Selector?) {
         self.representedBundleID = bundleID
+        self.representedShortcutID = shortcutID
         self.representedPID = pid
         self.displayTitle = title
         self.showsActiveIndicator = isActive
@@ -2346,7 +2382,7 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard representedBundleID != nil else {
+        guard dragItem != nil else {
             super.mouseDown(with: event)
             return
         }
@@ -2374,13 +2410,13 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     }
 
     private func startDragging(with event: NSEvent) {
-        guard let representedBundleID else {
+        guard let dragItem else {
             return
         }
 
         onDragStarted?()
         let pasteboardItem = NSPasteboardItem()
-        pasteboardItem.setString(representedBundleID, forType: appDragPasteboardType)
+        pasteboardItem.setString(dragItem.rawValue, forType: appDragPasteboardType)
         let item = NSDraggingItem(pasteboardWriter: pasteboardItem)
         let image = image ?? NSImage(size: NSSize(width: 48, height: 48))
         let dragFrame = bounds.insetBy(dx: 8, dy: 8)
@@ -2394,9 +2430,38 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        guard let representedBundleID else { return }
+        guard let dragItem else { return }
         let droppedInsideBar = window?.frame.contains(screenPoint) ?? false
-        onDragFinished?(representedBundleID, droppedInsideBar)
+        onDragFinished?(dragItem, droppedInsideBar)
+    }
+
+    func matchesDragGroup(_ item: TaskbarDragItem) -> Bool {
+        switch item {
+        case .app:
+            return representedBundleID != nil
+        case .shortcut:
+            return representedShortcutID != nil
+        }
+    }
+
+    func matchesDragItem(_ item: TaskbarDragItem?) -> Bool {
+        guard let item else { return false }
+        switch item {
+        case .app(let bundleID):
+            return representedBundleID == bundleID
+        case .shortcut(let id):
+            return representedShortcutID == id
+        }
+    }
+
+    private var dragItem: TaskbarDragItem? {
+        if let representedBundleID {
+            return .app(representedBundleID)
+        }
+        if let representedShortcutID {
+            return .shortcut(representedShortcutID)
+        }
+        return nil
     }
 }
 
@@ -2440,11 +2505,11 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private var isRevealed = false
     private var isDraggingIcon = false
     private var isBarMenuOpen = false
-    private var draggedBundleID: String?
+    private var draggedItem: TaskbarDragItem?
     private var liveDropIndex: Int?
     private var insertionMarker: NSView?
     private var currentAppOrder: [String] = []
-    private var acceptedDropBundleIDs = Set<String>()
+    private var acceptedDropItems = Set<TaskbarDragItem>()
     private var hoverWindowWorkItem: DispatchWorkItem?
     private var windowTitleHideWorkItem: DispatchWorkItem?
     private var windowTitleSourceIconFrame: NSRect = .null
@@ -2630,13 +2695,13 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         dockBackground.wantsLayer = true
         dockBackground.layer?.cornerCurve = .continuous
         applyTheme()
-        dockBackground.onDropBundleID = { [weak self] bundleID, point in
+        dockBackground.onDropItem = { [weak self] item, point in
             guard let self else { return false }
-            return self.drop(bundleID: bundleID, at: self.hoverView.convert(point, from: self.dockBackground))
+            return self.drop(item: item, at: self.hoverView.convert(point, from: self.dockBackground))
         }
-        dockBackground.onDragBundleID = { [weak self] bundleID, point in
+        dockBackground.onDragItem = { [weak self] item, point in
             guard let self else { return }
-            self.updateLiveDrop(bundleID: bundleID, at: self.hoverView.convert(point, from: self.dockBackground))
+            self.updateLiveDrop(item: item, at: self.hoverView.convert(point, from: self.dockBackground))
         }
         dockBackground.onMenu = { [weak self] in
             self?.barContextMenu() ?? NSMenu()
@@ -2669,11 +2734,11 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
         hoverView.onEnter = { [weak self] in self?.reveal() }
         hoverView.onExit = { [weak self] in self?.scheduleHide() }
-        hoverView.onDropBundleID = { [weak self] bundleID, point in
-            self?.drop(bundleID: bundleID, at: point) ?? false
+        hoverView.onDropItem = { [weak self] item, point in
+            self?.drop(item: item, at: point) ?? false
         }
-        hoverView.onDragBundleID = { [weak self] bundleID, point in
-            self?.updateLiveDrop(bundleID: bundleID, at: point)
+        hoverView.onDragItem = { [weak self] item, point in
+            self?.updateLiveDrop(item: item, at: point)
         }
         hoverView.onMenu = { [weak self] in
             self?.barContextMenu() ?? NSMenu()
@@ -2868,9 +2933,16 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private func addShortcutItem(_ shortcut: CustomShortcutItem) {
         let icon = shortcutIcon(for: shortcut)
         icon?.size = NSSize(width: Settings.iconSize, height: Settings.iconSize)
-        let button = TaskbarItemView(title: shortcut.title, image: icon, bundleID: nil, pid: nil, isActive: false, target: self, action: #selector(openShortcut(_:)))
+        let button = TaskbarItemView(title: shortcut.title, image: icon, bundleID: nil, shortcutID: shortcut.id, pid: nil, isActive: false, target: self, action: #selector(openShortcut(_:)))
         button.identifier = NSUserInterfaceItemIdentifier(shortcut.id)
         button.menu = shortcutMenu(shortcut)
+        button.onDragStarted = { [weak self] in
+            self?.startIconDrag(item: .shortcut(shortcut.id))
+            self?.hideWorkItem?.cancel()
+        }
+        button.onDragFinished = { [weak self] item, droppedInsideBar in
+            self?.dragFinished(item: item, droppedInsideBar: droppedInsideBar)
+        }
         constrain(button)
         stackView.addArrangedSubview(button)
     }
@@ -2911,11 +2983,11 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         let button = TaskbarItemView(title: title, image: icon, bundleID: bundleID, pid: nil, isActive: false, target: self, action: #selector(launchPinned(_:)))
         button.menu = pinnedMenu(bundleID: bundleID)
         button.onDragStarted = { [weak self] in
-            self?.startIconDrag(bundleID: bundleID)
+            self?.startIconDrag(item: .app(bundleID))
             self?.hideWorkItem?.cancel()
         }
-        button.onDragFinished = { [weak self] bundleID, droppedInsideBar in
-            self?.dragFinished(bundleID: bundleID, droppedInsideBar: droppedInsideBar)
+        button.onDragFinished = { [weak self] item, droppedInsideBar in
+            self?.dragFinished(item: item, droppedInsideBar: droppedInsideBar)
         }
         constrain(button)
         stackView.addArrangedSubview(button)
@@ -2932,12 +3004,12 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         button.menu = appMenu(app)
         button.onDragStarted = { [weak self] in
             if let bundleID = app.bundleIdentifier {
-                self?.startIconDrag(bundleID: bundleID)
+                self?.startIconDrag(item: .app(bundleID))
             }
             self?.hideWorkItem?.cancel()
         }
-        button.onDragFinished = { [weak self] bundleID, droppedInsideBar in
-            self?.dragFinished(bundleID: bundleID, droppedInsideBar: droppedInsideBar)
+        button.onDragFinished = { [weak self] item, droppedInsideBar in
+            self?.dragFinished(item: item, droppedInsideBar: droppedInsideBar)
         }
         button.onHoverStarted = { [weak self, weak app] button in
             guard let app else { return }
@@ -3005,17 +3077,28 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: item)
     }
 
-    private func startIconDrag(bundleID: String) {
-        guard Settings.showFinder || bundleID != finderBundleID else { return }
+    private func startIconDrag(item: TaskbarDragItem) {
+        if case .app(let bundleID) = item {
+            guard Settings.showFinder || bundleID != finderBundleID else { return }
+        }
         hideWindowTitlePanel()
         isDraggingIcon = true
-        draggedBundleID = bundleID
+        draggedItem = item
         liveDropIndex = nil
         setDraggedIconHidden(true)
         reveal()
     }
 
-    private func drop(bundleID: String, at point: CGPoint) -> Bool {
+    private func drop(item: TaskbarDragItem, at point: CGPoint) -> Bool {
+        switch item {
+        case .app(let bundleID):
+            return dropApp(bundleID: bundleID, at: point)
+        case .shortcut(let id):
+            return dropShortcut(id: id, at: point)
+        }
+    }
+
+    private func dropApp(bundleID: String, at point: CGPoint) -> Bool {
         guard Settings.showFinder || bundleID != finderBundleID else { return false }
         guard runningApps[bundleID] != nil || NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil else {
             return false
@@ -3024,21 +3107,41 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         var appOrder = currentAppOrder.filter { $0 != bundleID && (Settings.showFinder || $0 != finderBundleID) }
         let insertionIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
         appOrder.insert(bundleID, at: min(insertionIndex, appOrder.count))
-        acceptedDropBundleIDs.insert(bundleID)
+        acceptedDropItems.insert(.app(bundleID))
         Settings.appOrderBundleIDs = appOrder
         AppDelegate.shared?.rebuildBarsInPlace()
         return true
     }
 
-    private func updateLiveDrop(bundleID: String, at point: CGPoint) {
-        guard isDraggingIcon, Settings.showFinder || bundleID != finderBundleID else { return }
-        let newIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
-        guard liveDropIndex != newIndex else { return }
-        liveDropIndex = newIndex
-        moveInsertionMarker(toAppSlot: newIndex)
+    private func dropShortcut(id: String, at point: CGPoint) -> Bool {
+        var shortcuts = Settings.customShortcuts
+        guard let shortcut = shortcuts.first(where: { $0.id == id }) else { return false }
+        shortcuts.removeAll { $0.id == id }
+        let insertionIndex = shortcutInsertionIndex(forDrop: point, excluding: id)
+        shortcuts.insert(shortcut, at: min(insertionIndex, shortcuts.count))
+        acceptedDropItems.insert(.shortcut(id))
+        Settings.customShortcuts = shortcuts
+        AppDelegate.shared?.rebuildBarsInPlace()
+        return true
     }
 
-    private func moveInsertionMarker(toAppSlot appSlot: Int) {
+    private func updateLiveDrop(item: TaskbarDragItem, at point: CGPoint) {
+        guard isDraggingIcon else { return }
+        let newIndex: Int
+        switch item {
+        case .app(let bundleID):
+            guard Settings.showFinder || bundleID != finderBundleID else { return }
+            newIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
+        case .shortcut(let id):
+            guard Settings.customShortcuts.contains(where: { $0.id == id }) else { return }
+            newIndex = shortcutInsertionIndex(forDrop: point, excluding: id)
+        }
+        guard liveDropIndex != newIndex else { return }
+        liveDropIndex = newIndex
+        moveInsertionMarker(toSlot: newIndex, for: item)
+    }
+
+    private func moveInsertionMarker(toSlot slot: Int, for item: TaskbarDragItem) {
         let marker = insertionMarker ?? makeInsertionMarker()
         insertionMarker = marker
         if marker.superview != nil {
@@ -3046,7 +3149,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             marker.removeFromSuperview()
         }
 
-        let arrangedIndex = arrangedSubviewIndex(forAppSlot: appSlot)
+        let arrangedIndex = arrangedSubviewIndex(forSlot: slot, item: item)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.06
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -3076,18 +3179,31 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         return marker
     }
 
-    private func arrangedSubviewIndex(forAppSlot appSlot: Int) -> Int {
-        var appIndex = 0
+    private func arrangedSubviewIndex(forSlot slot: Int, item: TaskbarDragItem) -> Int {
+        var itemIndex = 0
+        var lastGroupEndIndex: Int?
         for (arrangedIndex, view) in stackView.arrangedSubviews.enumerated() {
             if view === insertionMarker { continue }
-            guard let item = view as? TaskbarItemView, item.representedBundleID != nil else {
+            guard let viewItem = view as? TaskbarItemView, viewItem.matchesDragGroup(item) else {
+                if case .app = item {
+                    return arrangedIndex
+                }
+                continue
+            }
+            lastGroupEndIndex = arrangedIndex + 1
+            if viewItem.matchesDragItem(draggedItem) {
+                if itemIndex == slot {
+                    return arrangedIndex
+                }
+                continue
+            }
+            if itemIndex == slot {
                 return arrangedIndex
             }
-            if item.representedBundleID == draggedBundleID { continue }
-            if appIndex == appSlot {
-                return arrangedIndex
-            }
-            appIndex += 1
+            itemIndex += 1
+        }
+        if case .shortcut = item, let lastGroupEndIndex {
+            return lastGroupEndIndex
         }
         return stackView.arrangedSubviews.count
     }
@@ -3108,15 +3224,33 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         return index
     }
 
-    private func dragFinished(bundleID: String, droppedInsideBar: Bool) {
+    private func shortcutInsertionIndex(forDrop point: CGPoint, excluding id: String) -> Int {
+        let stackPoint = stackView.convert(point, from: hoverView)
+        let isVertical = Settings.edge == .left || Settings.edge == .right
+        let dropPosition = isVertical ? stackPoint.y : stackPoint.x
+        var index = 0
+        for view in stackView.arrangedSubviews {
+            guard let item = view as? TaskbarItemView, let itemShortcutID = item.representedShortcutID else { continue }
+            if itemShortcutID == id { continue }
+            let itemMid = isVertical ? item.frame.midY : item.frame.midX
+            if dropPosition > itemMid {
+                index += 1
+            }
+        }
+        return index
+    }
+
+    private func dragFinished(item: TaskbarDragItem, droppedInsideBar: Bool) {
         isDraggingIcon = false
-        draggedBundleID = nil
         liveDropIndex = nil
         removeInsertionMarker()
         setDraggedIconHidden(false)
-        let wasAcceptedDrop = acceptedDropBundleIDs.remove(bundleID) != nil
-        if !droppedInsideBar, !wasAcceptedDrop, Settings.pinnedBundleIDs.contains(bundleID) {
-            Settings.pinnedBundleIDs.removeAll { $0 == bundleID }
+        draggedItem = nil
+        let wasAcceptedDrop = acceptedDropItems.remove(item) != nil
+        if !droppedInsideBar, !wasAcceptedDrop {
+            if case .app(let bundleID) = item, Settings.pinnedBundleIDs.contains(bundleID) {
+                Settings.pinnedBundleIDs.removeAll { $0 == bundleID }
+            }
             AppDelegate.shared?.rebuildBarsInPlace()
         } else if !wasAcceptedDrop {
             AppDelegate.shared?.rebuildBarsInPlace()
@@ -3124,9 +3258,9 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func setDraggedIconHidden(_ hidden: Bool) {
-        guard let draggedBundleID else { return }
+        guard let draggedItem else { return }
         for view in stackView.arrangedSubviews {
-            guard let item = view as? TaskbarItemView, item.representedBundleID == draggedBundleID else { continue }
+            guard let item = view as? TaskbarItemView, item.matchesDragItem(draggedItem) else { continue }
             item.isHidden = hidden
             item.alphaValue = hidden ? 0 : 1
         }

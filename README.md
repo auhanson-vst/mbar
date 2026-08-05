@@ -77,7 +77,7 @@ Right-click empty space on mbar to open a Dock-style context menu with settings,
 
 Settings → Items → Shortcuts lets you add visual launcher items for websites, app deep links, applications, files, and folders. The shortcut editor includes presets such as Outlook Calendar (`ms-outlook://events`), target pickers for apps/files/folders, URL validation, optional borrowed app icons by bundle ID, reordering, editing, and removal.
 
-Drag app icons within the bar to reorder them without pinning. While dragging, mbar stays open and shows a stable insertion marker for the drop position. Use an app icon's Options menu to keep it pinned; drag a pinned app icon out of the expanded interaction area to unpin it.
+Drag app icons within the bar to reorder them without pinning, and drag shortcut icons within the shortcut group to reorder them visually. While dragging, mbar stays open and shows a stable insertion marker for the drop position. Use an app icon's Options menu to keep it pinned; drag a pinned app icon out of the expanded interaction area to unpin it.
 
 After dropping, mbar preserves the revealed state instead of immediately hiding.
 
