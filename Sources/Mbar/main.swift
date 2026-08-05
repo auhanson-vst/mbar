@@ -124,6 +124,7 @@ struct Settings {
         static let showTrash = "showTrash"
         static let pinnedBundleIDs = "pinnedBundleIDs"
         static let appOrderBundleIDs = "appOrderBundleIDs"
+        static let taskbarItemOrder = "taskbarItemOrder"
         static let hiddenBundleIDs = "hiddenBundleIDs"
         static let customShortcuts = "customShortcuts"
     }
@@ -224,6 +225,37 @@ struct Settings {
         set {
             let filtered = newValue.filter { showFinder || $0 != finderBundleID }
             UserDefaults.standard.set(Array(NSOrderedSet(array: filtered)) as? [String] ?? filtered, forKey: Key.appOrderBundleIDs)
+        }
+    }
+
+    static var taskbarItemOrder: [TaskbarDragItem] {
+        get {
+            let saved = UserDefaults.standard.stringArray(forKey: Key.taskbarItemOrder) ?? []
+            let decoded = saved.compactMap(TaskbarDragItem.init(rawValue:))
+            if !decoded.isEmpty {
+                return decoded.filter { item in
+                    if case .app(let bundleID) = item {
+                        return showFinder || bundleID != finderBundleID
+                    }
+                    return true
+                }
+            }
+            return appOrderBundleIDs.map(TaskbarDragItem.app)
+        }
+        set {
+            let filtered = newValue.filter { item in
+                if case .app(let bundleID) = item {
+                    return showFinder || bundleID != finderBundleID
+                }
+                return true
+            }
+            UserDefaults.standard.set(filtered.map(\.rawValue), forKey: Key.taskbarItemOrder)
+            appOrderBundleIDs = filtered.compactMap { item in
+                if case .app(let bundleID) = item {
+                    return bundleID
+                }
+                return nil
+            }
         }
     }
 
@@ -2435,13 +2467,8 @@ final class TaskbarItemView: NSButton, NSDraggingSource {
         onDragFinished?(dragItem, droppedInsideBar)
     }
 
-    func matchesDragGroup(_ item: TaskbarDragItem) -> Bool {
-        switch item {
-        case .app:
-            return representedBundleID != nil
-        case .shortcut:
-            return representedShortcutID != nil
-        }
+    var isDraggableItem: Bool {
+        representedBundleID != nil || representedShortcutID != nil
     }
 
     func matchesDragItem(_ item: TaskbarDragItem?) -> Bool {
@@ -2508,7 +2535,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private var draggedItem: TaskbarDragItem?
     private var liveDropIndex: Int?
     private var insertionMarker: NSView?
-    private var currentAppOrder: [String] = []
+    private var currentTaskbarItemOrder: [TaskbarDragItem] = []
     private var acceptedDropItems = Set<TaskbarDragItem>()
     private var hoverWindowWorkItem: DispatchWorkItem?
     private var windowTitleHideWorkItem: DispatchWorkItem?
@@ -2631,31 +2658,44 @@ final class TaskbarController: NSObject, NSMenuDelegate {
         var renderedBundleIDs = Set<String>()
         var renderedPIDs = Set<pid_t>()
         let runningBundleIDs = apps.sorted(by: appSort).compactMap(\.bundleIdentifier)
-        let defaultOrder = pinnedIDs + runningBundleIDs.filter { !pinnedIDs.contains($0) }
-        let savedOrder = Settings.appOrderBundleIDs
-        let orderedBundleIDs = savedOrder.filter { defaultOrder.contains($0) } + defaultOrder.filter { !savedOrder.contains($0) }
+        let defaultBundleIDs = pinnedIDs + runningBundleIDs.filter { !pinnedIDs.contains($0) }
+        let defaultItems = defaultBundleIDs.map(TaskbarDragItem.app) + Settings.customShortcuts.map { TaskbarDragItem.shortcut($0.id) }
+        let savedOrder = Settings.taskbarItemOrder
+        let orderedItems = savedOrder.filter { defaultItems.contains($0) } + defaultItems.filter { !savedOrder.contains($0) }
+        let orderedBundleIDs = orderedItems.compactMap { item in
+            if case .app(let bundleID) = item {
+                return bundleID
+            }
+            return nil
+        }
         let shortcutIconBundleIDs = Set(Settings.customShortcuts.compactMap(\.iconBundleID))
         let missingMetadata = Set(orderedBundleIDs.filter { AppDelegate.shared?.metadata(for: $0) == nil })
             .union(shortcutIconBundleIDs.filter { AppDelegate.shared?.metadata(for: $0) == nil })
         AppDelegate.shared?.schedulePresentationRefresh(for: missingMetadata, refreshBadges: false)
-        for bundleID in orderedBundleIDs {
-            guard !renderedBundleIDs.contains(bundleID) else { continue }
-            if let app = runningApps[bundleID] {
-                guard shouldShow(app: app), !renderedPIDs.contains(app.processIdentifier) else { continue }
-                addAppItem(app)
-                renderedPIDs.insert(app.processIdentifier)
+        var renderedItems: [TaskbarDragItem] = []
+        for item in orderedItems {
+            switch item {
+            case .app(let bundleID):
+                guard !renderedBundleIDs.contains(bundleID) else { continue }
+                if let app = runningApps[bundleID] {
+                    guard shouldShow(app: app), !renderedPIDs.contains(app.processIdentifier) else { continue }
+                    addAppItem(app)
+                    renderedPIDs.insert(app.processIdentifier)
+                    renderedBundleIDs.insert(bundleID)
+                    renderedItems.append(item)
+                    continue
+                }
+                guard pinnedIDs.contains(bundleID) else { continue }
+                addPinnedItem(bundleID: bundleID)
                 renderedBundleIDs.insert(bundleID)
-                continue
+                renderedItems.append(item)
+            case .shortcut(let id):
+                guard let shortcut = Settings.customShortcuts.first(where: { $0.id == id }) else { continue }
+                addShortcutItem(shortcut)
+                renderedItems.append(item)
             }
-            guard pinnedIDs.contains(bundleID) else { continue }
-            addPinnedItem(bundleID: bundleID)
-            renderedBundleIDs.insert(bundleID)
         }
-        currentAppOrder = orderedBundleIDs.filter { renderedBundleIDs.contains($0) }
-
-        for shortcut in Settings.customShortcuts {
-            addShortcutItem(shortcut)
-        }
+        currentTaskbarItemOrder = renderedItems
 
         if Settings.showApplications || Settings.showTrash {
             addSeparator()
@@ -3092,50 +3132,32 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     private func drop(item: TaskbarDragItem, at point: CGPoint) -> Bool {
         switch item {
         case .app(let bundleID):
-            return dropApp(bundleID: bundleID, at: point)
+            guard Settings.showFinder || bundleID != finderBundleID else { return false }
+            guard runningApps[bundleID] != nil || NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil else {
+                return false
+            }
         case .shortcut(let id):
-            return dropShortcut(id: id, at: point)
-        }
-    }
-
-    private func dropApp(bundleID: String, at point: CGPoint) -> Bool {
-        guard Settings.showFinder || bundleID != finderBundleID else { return false }
-        guard runningApps[bundleID] != nil || NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil else {
-            return false
+            guard Settings.customShortcuts.contains(where: { $0.id == id }) else { return false }
         }
 
-        var appOrder = currentAppOrder.filter { $0 != bundleID && (Settings.showFinder || $0 != finderBundleID) }
-        let insertionIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
-        appOrder.insert(bundleID, at: min(insertionIndex, appOrder.count))
-        acceptedDropItems.insert(.app(bundleID))
-        Settings.appOrderBundleIDs = appOrder
-        AppDelegate.shared?.rebuildBarsInPlace()
-        return true
-    }
-
-    private func dropShortcut(id: String, at point: CGPoint) -> Bool {
-        var shortcuts = Settings.customShortcuts
-        guard let shortcut = shortcuts.first(where: { $0.id == id }) else { return false }
-        shortcuts.removeAll { $0.id == id }
-        let insertionIndex = shortcutInsertionIndex(forDrop: point, excluding: id)
-        shortcuts.insert(shortcut, at: min(insertionIndex, shortcuts.count))
-        acceptedDropItems.insert(.shortcut(id))
-        Settings.customShortcuts = shortcuts
+        var order = currentTaskbarItemOrder.filter { $0 != item }
+        let insertionIndex = taskbarInsertionIndex(forDrop: point, excluding: item)
+        order.insert(item, at: min(insertionIndex, order.count))
+        acceptedDropItems.insert(item)
+        Settings.taskbarItemOrder = order
         AppDelegate.shared?.rebuildBarsInPlace()
         return true
     }
 
     private func updateLiveDrop(item: TaskbarDragItem, at point: CGPoint) {
         guard isDraggingIcon else { return }
-        let newIndex: Int
         switch item {
         case .app(let bundleID):
             guard Settings.showFinder || bundleID != finderBundleID else { return }
-            newIndex = appInsertionIndex(forDrop: point, excluding: bundleID)
         case .shortcut(let id):
             guard Settings.customShortcuts.contains(where: { $0.id == id }) else { return }
-            newIndex = shortcutInsertionIndex(forDrop: point, excluding: id)
         }
+        let newIndex = taskbarInsertionIndex(forDrop: point, excluding: item)
         guard liveDropIndex != newIndex else { return }
         liveDropIndex = newIndex
         moveInsertionMarker(toSlot: newIndex, for: item)
@@ -3181,16 +3203,9 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func arrangedSubviewIndex(forSlot slot: Int, item: TaskbarDragItem) -> Int {
         var itemIndex = 0
-        var lastGroupEndIndex: Int?
         for (arrangedIndex, view) in stackView.arrangedSubviews.enumerated() {
             if view === insertionMarker { continue }
-            guard let viewItem = view as? TaskbarItemView, viewItem.matchesDragGroup(item) else {
-                if case .app = item {
-                    return arrangedIndex
-                }
-                continue
-            }
-            lastGroupEndIndex = arrangedIndex + 1
+            guard let viewItem = view as? TaskbarItemView, viewItem.isDraggableItem else { return arrangedIndex }
             if viewItem.matchesDragItem(draggedItem) {
                 if itemIndex == slot {
                     return arrangedIndex
@@ -3202,36 +3217,17 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             }
             itemIndex += 1
         }
-        if case .shortcut = item, let lastGroupEndIndex {
-            return lastGroupEndIndex
-        }
         return stackView.arrangedSubviews.count
     }
 
-    private func appInsertionIndex(forDrop point: CGPoint, excluding bundleID: String) -> Int {
+    private func taskbarInsertionIndex(forDrop point: CGPoint, excluding draggedItem: TaskbarDragItem) -> Int {
         let stackPoint = stackView.convert(point, from: hoverView)
         let isVertical = Settings.edge == .left || Settings.edge == .right
         let dropPosition = isVertical ? stackPoint.y : stackPoint.x
         var index = 0
         for view in stackView.arrangedSubviews {
-            guard let item = view as? TaskbarItemView, let itemBundleID = item.representedBundleID else { continue }
-            if itemBundleID == bundleID { continue }
-            let itemMid = isVertical ? item.frame.midY : item.frame.midX
-            if dropPosition > itemMid {
-                index += 1
-            }
-        }
-        return index
-    }
-
-    private func shortcutInsertionIndex(forDrop point: CGPoint, excluding id: String) -> Int {
-        let stackPoint = stackView.convert(point, from: hoverView)
-        let isVertical = Settings.edge == .left || Settings.edge == .right
-        let dropPosition = isVertical ? stackPoint.y : stackPoint.x
-        var index = 0
-        for view in stackView.arrangedSubviews {
-            guard let item = view as? TaskbarItemView, let itemShortcutID = item.representedShortcutID else { continue }
-            if itemShortcutID == id { continue }
+            guard let item = view as? TaskbarItemView, item.isDraggableItem else { continue }
+            if item.matchesDragItem(draggedItem) { continue }
             let itemMid = isVertical ? item.frame.midY : item.frame.midX
             if dropPosition > itemMid {
                 index += 1
