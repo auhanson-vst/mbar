@@ -1197,7 +1197,7 @@ final class ShortcutEditorWindowController: NSWindowController {
         case .website:
             targetField.placeholderString = "https://calendar.google.com/"
         case .appLink:
-            targetField.placeholderString = "ms-outlook://events"
+            targetField.placeholderString = "mbar://outlook/calendar"
         case .application:
             targetField.placeholderString = "/Applications/App.app"
         case .file:
@@ -1210,7 +1210,7 @@ final class ShortcutEditorWindowController: NSWindowController {
     @objc private func useOutlookCalendarPreset(_ sender: Any?) {
         titleField.stringValue = "Calendar"
         kindPopup.selectItem(withTitle: ShortcutKind.appLink.displayName)
-        targetField.stringValue = "ms-outlook://events"
+        targetField.stringValue = "mbar://outlook/calendar"
         iconBundleField.stringValue = "com.microsoft.Outlook"
         updateKindState()
     }
@@ -1288,7 +1288,7 @@ final class ShortcutEditorWindowController: NSWindowController {
             }
         case .appLink:
             guard let url = URL(string: target), url.scheme != nil else {
-                showError("App shortcuts need a valid URL scheme, like ms-outlook://events.")
+                showError("App shortcuts need a valid URL scheme, like mbar://outlook/calendar or slack://open.")
                 return false
             }
         case .application:
@@ -3765,12 +3765,41 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func launch(_ shortcut: CustomShortcutItem) {
+        if isOutlookCalendarShortcut(shortcut) {
+            openOutlookCalendar()
+            return
+        }
         guard let url = shortcut.launchURL else { return }
         if shortcut.kind == .application {
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
         } else {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    private func isOutlookCalendarShortcut(_ shortcut: CustomShortcutItem) -> Bool {
+        let target = shortcut.target.lowercased()
+        return target == "mbar://outlook/calendar"
+            || ((shortcut.iconBundleID == "com.microsoft.Outlook" || shortcut.title.localizedCaseInsensitiveContains("calendar"))
+                && (target == "ms-outlook://events" || target == "ms-outlook://calendar"))
+    }
+
+    private func openOutlookCalendar() {
+        let script = """
+        tell application "Microsoft Outlook" to activate
+        tell application "System Events"
+            repeat 24 times
+                try
+                    tell process "Microsoft Outlook"
+                        perform action "AXPress" of menu item "Calendar" of menu 1 of menu item "Go To" of menu "View" of menu bar item "View" of menu bar 1
+                    end tell
+                    return
+                end try
+                delay 0.25
+            end repeat
+        end tell
+        """
+        runAppleScriptAsync(script)
     }
 
     @objc private func menuShowInFinder(_ sender: NSMenuItem) {
@@ -3866,6 +3895,12 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func runAppleScript(_ script: String) {
         NSAppleScript(source: script)?.executeAndReturnError(nil)
+    }
+
+    private func runAppleScriptAsync(_ script: String) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            NSAppleScript(source: script)?.executeAndReturnError(nil)
+        }
     }
 }
 
