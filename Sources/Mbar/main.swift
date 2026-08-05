@@ -2540,10 +2540,14 @@ final class TaskbarController: NSObject, NSMenuDelegate {
                     && (Settings.showFinder || app.bundleIdentifier != finderBundleID)
             }
 
-        runningApps = Dictionary(uniqueKeysWithValues: apps.compactMap { app in
-            guard let bundleID = app.bundleIdentifier else { return nil }
-            return (bundleID, app)
-        })
+        runningApps = apps.reduce(into: [String: NSRunningApplication]()) { result, app in
+            guard let bundleID = app.bundleIdentifier else { return }
+            if let existing = result[bundleID] {
+                result[bundleID] = preferredRunningApp(existing, app)
+            } else {
+                result[bundleID] = app
+            }
+        }
         dockBadges = AppDelegate.shared?.dockBadgeSnapshot() ?? [:]
 
         if Settings.activityMode {
@@ -3214,6 +3218,16 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             return false
         }
         return true
+    }
+
+    private func preferredRunningApp(_ lhs: NSRunningApplication, _ rhs: NSRunningApplication) -> NSRunningApplication {
+        if lhs.isActive != rhs.isActive {
+            return lhs.isActive ? lhs : rhs
+        }
+        if lhs.isHidden != rhs.isHidden {
+            return lhs.isHidden ? rhs : lhs
+        }
+        return lhs.processIdentifier <= rhs.processIdentifier ? lhs : rhs
     }
 
     private func appSort(_ lhs: NSRunningApplication, _ rhs: NSRunningApplication) -> Bool {
