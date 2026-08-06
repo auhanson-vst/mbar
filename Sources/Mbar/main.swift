@@ -371,6 +371,7 @@ struct ProcessSample {
 struct AppWindowState {
     let visibleCount: Int
     let minimizedCount: Int
+    let hasForegroundWindow: Bool
 
     var hasWindows: Bool {
         visibleCount + minimizedCount > 0
@@ -1083,7 +1084,10 @@ final class AccessibilityWindowCatalog {
     static func state(for pid: pid_t) -> AppWindowState? {
         guard isTrusted else { return nil }
         let candidates = unique(windows(for: pid) + minimizedWindows(for: pid))
-        guard !candidates.isEmpty else { return AppWindowState(visibleCount: 0, minimizedCount: 0) }
+        let hasForegroundWindow = focusedApplicationPID() == pid && candidates.contains(where: isFocusedWindow)
+        guard !candidates.isEmpty else {
+            return AppWindowState(visibleCount: 0, minimizedCount: 0, hasForegroundWindow: hasForegroundWindow)
+        }
         var visibleCount = 0
         var minimizedCount = 0
         for window in candidates {
@@ -1093,7 +1097,7 @@ final class AccessibilityWindowCatalog {
                 visibleCount += 1
             }
         }
-        return AppWindowState(visibleCount: visibleCount, minimizedCount: minimizedCount)
+        return AppWindowState(visibleCount: visibleCount, minimizedCount: minimizedCount, hasForegroundWindow: hasForegroundWindow)
     }
 
     @discardableResult
@@ -1101,6 +1105,15 @@ final class AccessibilityWindowCatalog {
         guard isTrusted else { return false }
         let candidates = unique(minimizedWindows(for: pid) + windows(for: pid))
         guard let window = candidates.first(where: isMinimized) else { return false }
+        restore(window)
+        return true
+    }
+
+    @discardableResult
+    static func showFirstAvailableWindow(for pid: pid_t) -> Bool {
+        guard isTrusted else { return false }
+        let candidates = unique(windows(for: pid) + minimizedWindows(for: pid))
+        guard let window = candidates.first(where: { !isMinimized($0) }) ?? candidates.first else { return false }
         restore(window)
         return true
     }
@@ -1151,6 +1164,26 @@ final class AccessibilityWindowCatalog {
         var minimizedValue: CFTypeRef?
         return AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success
             && (minimizedValue as? Bool == true)
+    }
+
+    private static func isFocusedWindow(_ window: AXUIElement) -> Bool {
+        var focusedValue: CFTypeRef?
+        return AXUIElementCopyAttributeValue(window, kAXFocusedAttribute as CFString, &focusedValue) == .success
+            && (focusedValue as? Bool == true)
+            && !isMinimized(window)
+    }
+
+    private static func focusedApplicationPID() -> pid_t? {
+        let system = AXUIElementCreateSystemWide()
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &value) == .success,
+              let appElement = value
+        else {
+            return nil
+        }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(appElement as! AXUIElement, &pid) == .success else { return nil }
+        return pid
     }
 
     private static func windowTitle(_ window: AXUIElement) -> String? {
@@ -3947,23 +3980,25 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func cycleWindows(for app: NSRunningApplication) {
-        app.unhide()
         let state = AccessibilityWindowCatalog.state(for: app.processIdentifier)
-        if let state, state.hasWindows, state.minimizedCount == 0, state.visibleCount > 0 {
+        if let state, state.hasWindows, state.minimizedCount == 0, state.visibleCount > 0, state.hasForegroundWindow {
             app.hide()
             return
         }
 
+        app.unhide()
         if AccessibilityWindowCatalog.restoreNextMinimizedWindow(for: app.processIdentifier) {
             app.activate(options: [.activateAllWindows])
             return
         }
 
         app.activate(options: [.activateAllWindows])
+        AccessibilityWindowCatalog.showFirstAvailableWindow(for: app.processIdentifier)
         reopen(app)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak app] in
             guard let app else { return }
             if !AccessibilityWindowCatalog.restoreNextMinimizedWindow(for: app.processIdentifier) {
+                AccessibilityWindowCatalog.showFirstAvailableWindow(for: app.processIdentifier)
                 app.activate(options: [.activateAllWindows])
             }
         }
