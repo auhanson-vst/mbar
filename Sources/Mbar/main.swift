@@ -368,6 +368,15 @@ struct ProcessSample {
     let memory: String
 }
 
+struct AppWindowState {
+    let visibleCount: Int
+    let minimizedCount: Int
+
+    var hasWindows: Bool {
+        visibleCount + minimizedCount > 0
+    }
+}
+
 @MainActor
 final class HoverView: NSView {
     var onEnter: (() -> Void)?
@@ -1071,6 +1080,31 @@ final class AccessibilityWindowCatalog {
         }
     }
 
+    static func state(for pid: pid_t) -> AppWindowState? {
+        guard isTrusted else { return nil }
+        let candidates = unique(windows(for: pid) + minimizedWindows(for: pid))
+        guard !candidates.isEmpty else { return AppWindowState(visibleCount: 0, minimizedCount: 0) }
+        var visibleCount = 0
+        var minimizedCount = 0
+        for window in candidates {
+            if isMinimized(window) {
+                minimizedCount += 1
+            } else {
+                visibleCount += 1
+            }
+        }
+        return AppWindowState(visibleCount: visibleCount, minimizedCount: minimizedCount)
+    }
+
+    @discardableResult
+    static func restoreNextMinimizedWindow(for pid: pid_t) -> Bool {
+        guard isTrusted else { return false }
+        let candidates = unique(minimizedWindows(for: pid) + windows(for: pid))
+        guard let window = candidates.first(where: isMinimized) else { return false }
+        restore(window)
+        return true
+    }
+
     private static func windows(for pid: pid_t) -> [AXUIElement] {
         windowList(for: pid, attribute: kAXWindowsAttribute as String)
     }
@@ -1090,11 +1124,20 @@ final class AccessibilityWindowCatalog {
         return windows
     }
 
+    private static func unique(_ windows: [AXUIElement]) -> [AXUIElement] {
+        var seen = Set<UInt>()
+        var result: [AXUIElement] = []
+        for window in windows {
+            let key = CFHash(window)
+            guard seen.insert(key).inserted else { continue }
+            result.append(window)
+        }
+        return result
+    }
+
     @discardableResult
     private static func restore(_ window: AXUIElement) -> Bool {
-        var minimizedValue: CFTypeRef?
-        let isMinimized = AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success
-            && (minimizedValue as? Bool == true)
+        let isMinimized = isMinimized(window)
         if isMinimized {
             AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
         }
@@ -1102,6 +1145,12 @@ final class AccessibilityWindowCatalog {
         AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         return isMinimized
+    }
+
+    private static func isMinimized(_ window: AXUIElement) -> Bool {
+        var minimizedValue: CFTypeRef?
+        return AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success
+            && (minimizedValue as? Bool == true)
     }
 
     private static func windowTitle(_ window: AXUIElement) -> String? {
@@ -3577,13 +3626,13 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     @objc private func activateApp(_ sender: TaskbarItemView) {
         guard let bundleID = sender.representedBundleID, let app = runningApps[bundleID] else { return }
-        activate(app)
+        cycleWindows(for: app)
     }
 
     @objc private func launchPinned(_ sender: TaskbarItemView) {
         guard let bundleID = sender.representedBundleID else { return }
         if let app = runningApps[bundleID] {
-            activate(app)
+            cycleWindows(for: app)
             return
         }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
@@ -3894,6 +3943,29 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             guard let app else { return }
             AccessibilityWindowCatalog.restoreWindows(for: app.processIdentifier)
             app.activate(options: [.activateAllWindows])
+        }
+    }
+
+    private func cycleWindows(for app: NSRunningApplication) {
+        app.unhide()
+        let state = AccessibilityWindowCatalog.state(for: app.processIdentifier)
+        if let state, state.hasWindows, state.minimizedCount == 0, state.visibleCount > 0 {
+            app.hide()
+            return
+        }
+
+        if AccessibilityWindowCatalog.restoreNextMinimizedWindow(for: app.processIdentifier) {
+            app.activate(options: [.activateAllWindows])
+            return
+        }
+
+        app.activate(options: [.activateAllWindows])
+        reopen(app)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak app] in
+            guard let app else { return }
+            if !AccessibilityWindowCatalog.restoreNextMinimizedWindow(for: app.processIdentifier) {
+                app.activate(options: [.activateAllWindows])
+            }
         }
     }
 

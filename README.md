@@ -91,4 +91,6 @@ Window title menus prefer Accessibility API titles, then fall back to CoreGraphi
 
 When Accessibility permission is granted, activating an app from mbar unminimizes its windows before bringing the app forward.
 
+Clicking a running app icon cycles Dock-style window visibility: if no windows are shown it restores the first window, if some windows are shown it restores the next minimized window, and if all windows are shown it hides the app.
+
 Finder is always filtered out of mbar, even if macOS reports it as a running app or it was previously saved in pinned items.
