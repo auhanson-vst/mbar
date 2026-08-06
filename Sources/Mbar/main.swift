@@ -1056,38 +1056,52 @@ final class AccessibilityWindowCatalog {
             let title = windowTitle(window) ?? (appWindows.count == 1 ? appName : "\(appName) Window \(index + 1)")
             return WindowListItem(title: title) {
                 activateApp()
-                var minimizedValue: CFTypeRef?
-                let isMinimized = AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success
-                    && (minimizedValue as? Bool == true)
-                if isMinimized {
-                    AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-                }
-                AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                restore(window)
             }
         }
     }
 
-    static func unminimizeWindows(for pid: pid_t) {
-        guard isTrusted else { return }
-        for window in windows(for: pid) {
-            var minimizedValue: CFTypeRef?
-            let isMinimized = AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success
-                && (minimizedValue as? Bool == true)
-            if isMinimized {
-                AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-            }
+    @discardableResult
+    static func restoreWindows(for pid: pid_t) -> Bool {
+        guard isTrusted else { return false }
+        let candidates = windows(for: pid) + minimizedWindows(for: pid)
+        guard !candidates.isEmpty else { return false }
+        return candidates.reduce(false) { didRestore, window in
+            restore(window) || didRestore
         }
     }
 
     private static func windows(for pid: pid_t) -> [AXUIElement] {
+        windowList(for: pid, attribute: kAXWindowsAttribute as String)
+    }
+
+    private static func minimizedWindows(for pid: pid_t) -> [AXUIElement] {
+        windowList(for: pid, attribute: "AXMinimizedWindows")
+    }
+
+    private static func windowList(for pid: pid_t, attribute: String) -> [AXUIElement] {
         let app = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+        guard AXUIElementCopyAttributeValue(app, attribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement]
         else {
             return []
         }
         return windows
+    }
+
+    @discardableResult
+    private static func restore(_ window: AXUIElement) -> Bool {
+        var minimizedValue: CFTypeRef?
+        let isMinimized = AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedValue) == .success
+            && (minimizedValue as? Bool == true)
+        if isMinimized {
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
+        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        return isMinimized
     }
 
     private static func windowTitle(_ window: AXUIElement) -> String? {
@@ -3870,9 +3884,25 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     private func activate(_ app: NSRunningApplication) {
-        AccessibilityWindowCatalog.unminimizeWindows(for: app.processIdentifier)
         app.unhide()
         app.activate(options: [.activateAllWindows])
+        let didRestoreMinimizedWindow = AccessibilityWindowCatalog.restoreWindows(for: app.processIdentifier)
+        if !didRestoreMinimizedWindow {
+            reopen(app)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak app] in
+            guard let app else { return }
+            AccessibilityWindowCatalog.restoreWindows(for: app.processIdentifier)
+            app.activate(options: [.activateAllWindows])
+        }
+    }
+
+    private func reopen(_ app: NSRunningApplication) {
+        guard let bundleID = app.bundleIdentifier else { return }
+        let url = AppDelegate.shared?.metadata(for: bundleID)?.url
+            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        guard let url else { return }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
     }
 
     @objc private func menuHide(_ sender: NSMenuItem) {
