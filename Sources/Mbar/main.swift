@@ -3981,8 +3981,12 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func cycleWindows(for app: NSRunningApplication) {
         let state = AccessibilityWindowCatalog.state(for: app.processIdentifier)
-        if let state, state.hasWindows, state.minimizedCount == 0, state.visibleCount > 0, state.hasForegroundWindow {
-            app.hide()
+        if let state,
+           state.hasWindows,
+           state.minimizedCount == 0,
+           state.visibleCount > 0,
+           state.hasForegroundWindow || app.isActive {
+            hide(app)
             return
         }
 
@@ -4002,6 +4006,14 @@ final class TaskbarController: NSObject, NSMenuDelegate {
                 app.activate(options: [.activateAllWindows])
             }
         }
+    }
+
+    private func hide(_ app: NSRunningApplication) {
+        let didChange = app.hide()
+        if !didChange, let bundleID = app.bundleIdentifier {
+            setHiddenState(true, for: bundleID)
+        }
+        AppDelegate.shared?.rebuildBarsInPlace()
     }
 
     private func reopen(_ app: NSRunningApplication) {
