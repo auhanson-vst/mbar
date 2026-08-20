@@ -1562,19 +1562,98 @@ final class ShortcutEditorWindowController: NSWindowController {
 }
 
 final class DockBadgeCatalog {
+    /// Thread-safe holder for the cached Dock AX connection state. `badgeTexts()`
+    /// runs on a background utility queue (see `AppDelegate.startPresentationRefresh`),
+    /// and successive 5s ticks can in principle overlap, so mutable state shared
+    /// across calls is kept behind a lock rather than as bare static vars.
+    private final class ConnectionState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cachedDockElement: (pid: pid_t, element: AXUIElement)?
+        private var refreshesSinceRecycle = 0
+
+        /// Belt-and-suspenders periodic teardown: even with the connection reused
+        /// (rather than recreated) per refresh, we still explicitly drop and let the
+        /// underlying AX/XPC connection be released every so often, so any residual
+        /// per-call accumulation inside the accessibility server/XPC layer cannot
+        /// grow unbounded over a multi-day-uptime menu bar app. At the default 5s
+        /// refresh cadence this is roughly hourly.
+        private let connectionRecycleInterval = 720
+
+        /// Returns the AX element for the Dock, re-creating it only when the
+        /// Dock's process identifier changes (e.g. Dock relaunch after a crash)
+        /// or after a periodic recycle.
+        func element(for pid: pid_t) -> AXUIElement {
+            lock.lock()
+            defer { lock.unlock() }
+
+            refreshesSinceRecycle += 1
+            if refreshesSinceRecycle >= connectionRecycleInterval {
+                cachedDockElement = nil
+                refreshesSinceRecycle = 0
+            }
+
+            if let cached = cachedDockElement, cached.pid == pid {
+                return cached.element
+            }
+            let element = AXUIElementCreateApplication(pid)
+            cachedDockElement = (pid: pid, element: element)
+            return element
+        }
+
+        /// Explicitly tears down the cached AX element/connection. Safe to call at
+        /// any time (e.g. from a periodic app-level maintenance timer, or when the
+        /// Dock is no longer reachable); the next `element(for:)` call transparently
+        /// re-establishes it.
+        func release() {
+            lock.lock()
+            defer { lock.unlock() }
+            cachedDockElement = nil
+            refreshesSinceRecycle = 0
+        }
+    }
+
+    private static let connectionState = ConnectionState()
+
+    /// Hard bounds on the Dock AX tree walk. The Dock's accessibility tree is
+    /// shallow and small in practice (a handful of levels, tens of items), so
+    /// these limits are generous safety nets against a pathological/unbounded
+    /// traversal (e.g. a cyclic or unexpectedly deep AX tree) rather than
+    /// something expected to be hit in normal use.
+    private static let maxTraversalDepth = 6
+    private static let maxVisitedElements = 2000
+
     static func badgeTexts() -> [String: String] {
         guard AccessibilityWindowCatalog.isTrusted,
               let dock = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.dock" })
         else {
+            connectionState.release()
             return [:]
         }
 
+        let dockElement = connectionState.element(for: dock.processIdentifier)
+
         var badges: [String: String] = [:]
-        collectBadges(from: AXUIElementCreateApplication(dock.processIdentifier), into: &badges)
+        var visitedCount = 0
+        collectBadges(from: dockElement, depth: 0, visitedCount: &visitedCount, into: &badges)
         return badges
     }
 
-    private static func collectBadges(from element: AXUIElement, into badges: inout [String: String]) {
+    /// Explicitly tears down the cached AX element/connection. Safe to call at
+    /// any time (e.g. from a periodic app-level maintenance timer); the next
+    /// `badgeTexts()` call transparently re-establishes it.
+    static func releaseCachedConnection() {
+        connectionState.release()
+    }
+
+    private static func collectBadges(
+        from element: AXUIElement,
+        depth: Int,
+        visitedCount: inout Int,
+        into badges: inout [String: String]
+    ) {
+        visitedCount += 1
+        guard depth < maxTraversalDepth, visitedCount <= maxVisitedElements else { return }
+
         if role(of: element) == "AXDockItem",
            let status = stringAttribute(element, "AXStatusLabel"),
            let badge = displayBadge(from: status),
@@ -1584,7 +1663,8 @@ final class DockBadgeCatalog {
 
         guard let children = attribute(element, kAXChildrenAttribute as String) as? [AXUIElement] else { return }
         for child in children {
-            collectBadges(from: child, into: &badges)
+            guard visitedCount <= maxVisitedElements else { return }
+            collectBadges(from: child, depth: depth + 1, visitedCount: &visitedCount, into: &badges)
         }
     }
 
@@ -4289,6 +4369,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applicationCatalogTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.applicationCatalog.refreshIfNeeded(force: true)
+                // Explicit periodic teardown of the cached Dock AX/XPC connection.
+                // This is a deliberate app-level maintenance action (independent of
+                // DockBadgeCatalog's own internal recycle safety net) so the AX
+                // connection never lives longer than a few minutes, however long
+                // this menu bar app itself stays running.
+                DockBadgeCatalog.releaseCachedConnection()
             }
         }
 
