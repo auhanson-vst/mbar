@@ -4077,11 +4077,21 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func cycleWindows(for app: NSRunningApplication) {
         let state = AccessibilityWindowCatalog.state(for: app.processIdentifier)
+        let wasFocused = (state?.hasForegroundWindow ?? false) || app.isActive
+
+        // Clicking an app that wasn't already in focus should only bring it
+        // forward, never pull other minimized windows out of being
+        // minimized. Prefer an already-visible window; only when every
+        // window is minimized does it bring the first one into focus.
+        guard wasFocused else {
+            focusFirstAvailableWindow(for: app)
+            return
+        }
+
         if let state,
            state.hasWindows,
            state.minimizedCount == 0,
-           state.visibleCount > 0,
-           state.hasForegroundWindow || app.isActive {
+           state.visibleCount > 0 {
             hide(app)
             return
         }
@@ -4101,6 +4111,25 @@ final class TaskbarController: NSObject, NSMenuDelegate {
                 AccessibilityWindowCatalog.showFirstAvailableWindow(for: app.processIdentifier)
                 app.activate(options: [.activateAllWindows])
             }
+        }
+    }
+
+    /// Focuses an app that was clicked while it was not already in the
+    /// foreground, without restoring any other minimized windows: brings
+    /// forward the first already-visible window if there is one, and only
+    /// falls back to bringing the first (otherwise minimized) window into
+    /// focus when nothing is visible.
+    private func focusFirstAvailableWindow(for app: NSRunningApplication) {
+        app.unhide()
+        app.activate(options: [.activateAllWindows])
+        let didFocusWindow = AccessibilityWindowCatalog.showFirstAvailableWindow(for: app.processIdentifier)
+        if !didFocusWindow {
+            reopen(app)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak app] in
+            guard let app else { return }
+            AccessibilityWindowCatalog.showFirstAvailableWindow(for: app.processIdentifier)
+            app.activate(options: [.activateAllWindows])
         }
     }
 
