@@ -4350,6 +4350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingPresentationBundleIDs = Set<String>()
     private var pendingPresentationBadgeRefresh = false
     private var presentationRefreshWorkItem: DispatchWorkItem?
+    private var workspaceChangeWorkItem: DispatchWorkItem?
 
     var isSettingsVisible: Bool {
         settingsWindowController.window?.isVisible == true
@@ -4498,8 +4499,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func workspaceChanged(_ notification: Notification) {
-        controllers.forEach { $0.rebuild() }
-        schedulePresentationRefresh(for: [], refreshBadges: true)
+        // NSWorkspace can fire a burst of launch/terminate/activate/hide/unhide
+        // notifications in rapid succession (e.g. quickly switching between two
+        // apps, or one app posting several of these in a row). Each full
+        // rebuild() is itself tens to hundreds of milliseconds of main-thread
+        // work across every screen, so reacting to every single raw
+        // notification turns a burst of notifications into a burst of
+        // back-to-back rebuilds that backs up the main thread and makes mbar
+        // appear to freeze. Debounce the same way schedulePresentationRefresh
+        // already does: coalesce any notifications arriving within 150ms into
+        // one rebuild.
+        workspaceChangeWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            Telemetry.time("AppDelegate.workspaceChanged.rebuild") {
+                self.controllers.forEach { $0.rebuild() }
+            }
+            self.schedulePresentationRefresh(for: [], refreshBadges: true)
+        }
+        workspaceChangeWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
     }
 
     @objc private func screenChanged(_ notification: Notification) {
