@@ -1015,12 +1015,13 @@ final class WindowTitlePanel: NSPanel {
 
 final class WindowCatalog {
     static func visibleWindows() -> [WindowInfo] {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let rawWindows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return []
-        }
+        Telemetry.time("WindowCatalog.visibleWindows") {
+            let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+            guard let rawWindows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+                return []
+            }
 
-        return rawWindows.compactMap { item in
+            return rawWindows.compactMap { item in
             guard
                 let ownerPID = item[kCGWindowOwnerPID as String] as? pid_t,
                 let layer = item[kCGWindowLayer as String] as? Int,
@@ -1035,8 +1036,9 @@ final class WindowCatalog {
             else {
                 return nil
             }
-            let title = item[kCGWindowName as String] as? String ?? "Window"
-            return WindowInfo(ownerPID: ownerPID, title: title.isEmpty ? "Window" : title, bounds: CGRect(x: x, y: y, width: width, height: height))
+                let title = item[kCGWindowName as String] as? String ?? "Window"
+                return WindowInfo(ownerPID: ownerPID, title: title.isEmpty ? "Window" : title, bounds: CGRect(x: x, y: y, width: width, height: height))
+            }
         }
     }
 }
@@ -1127,14 +1129,16 @@ final class AccessibilityWindowCatalog {
     }
 
     private static func windowList(for pid: pid_t, attribute: String) -> [AXUIElement] {
-        let app = AXUIElementCreateApplication(pid)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, attribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement]
-        else {
-            return []
+        Telemetry.time("AX.windowList", extra: "pid=\(pid) attr=\(attribute)") {
+            let app = AXUIElementCreateApplication(pid)
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(app, attribute as CFString, &value) == .success,
+                  let windows = value as? [AXUIElement]
+            else {
+                return []
+            }
+            return windows
         }
-        return windows
     }
 
     private static func unique(_ windows: [AXUIElement]) -> [AXUIElement] {
@@ -1150,14 +1154,16 @@ final class AccessibilityWindowCatalog {
 
     @discardableResult
     private static func restore(_ window: AXUIElement) -> Bool {
-        let isMinimized = isMinimized(window)
-        if isMinimized {
-            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        Telemetry.time("AX.restore") {
+            let isMinimized = isMinimized(window)
+            if isMinimized {
+                AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+            }
+            AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+            AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+            return isMinimized
         }
-        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-        return isMinimized
     }
 
     private static func isMinimized(_ window: AXUIElement) -> Bool {
@@ -1174,16 +1180,18 @@ final class AccessibilityWindowCatalog {
     }
 
     private static func focusedApplicationPID() -> pid_t? {
-        let system = AXUIElementCreateSystemWide()
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &value) == .success,
-              let appElement = value
-        else {
-            return nil
+        Telemetry.time("AX.focusedApplicationPID") {
+            let system = AXUIElementCreateSystemWide()
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &value) == .success,
+                  let appElement = value
+            else {
+                return nil
+            }
+            var pid: pid_t = 0
+            guard AXUIElementGetPid(appElement as! AXUIElement, &pid) == .success else { return nil }
+            return pid
         }
-        var pid: pid_t = 0
-        guard AXUIElementGetPid(appElement as! AXUIElement, &pid) == .success else { return nil }
-        return pid
     }
 
     private static func windowTitle(_ window: AXUIElement) -> String? {
@@ -1623,19 +1631,21 @@ final class DockBadgeCatalog {
     private static let maxVisitedElements = 2000
 
     static func badgeTexts() -> [String: String] {
-        guard AccessibilityWindowCatalog.isTrusted,
-              let dock = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.dock" })
-        else {
-            connectionState.release()
-            return [:]
+        Telemetry.time("DockBadgeCatalog.badgeTexts") {
+            guard AccessibilityWindowCatalog.isTrusted,
+                  let dock = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.dock" })
+            else {
+                connectionState.release()
+                return [:]
+            }
+
+            let dockElement = connectionState.element(for: dock.processIdentifier)
+
+            var badges: [String: String] = [:]
+            var visitedCount = 0
+            collectBadges(from: dockElement, depth: 0, visitedCount: &visitedCount, into: &badges)
+            return badges
         }
-
-        let dockElement = connectionState.element(for: dock.processIdentifier)
-
-        var badges: [String: String] = [:]
-        var visitedCount = 0
-        collectBadges(from: dockElement, depth: 0, visitedCount: &visitedCount, into: &badges)
-        return badges
     }
 
     /// Explicitly tears down the cached AX element/connection. Safe to call at
@@ -1727,69 +1737,73 @@ final class ApplicationCatalog {
     }
 
     private static func discoverApplications() -> [URL] {
-        let roots = [
-            URL(fileURLWithPath: "/Applications"),
-            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications"),
-            URL(fileURLWithPath: "/System/Applications"),
-            URL(fileURLWithPath: "/System/Applications/Utilities"),
-            URL(fileURLWithPath: "/Applications/Setapp")
-        ]
-        var urls: [URL] = []
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
-        for root in roots {
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: keys,
-                options: [.skipsHiddenFiles]
-            ) else { continue }
+        Telemetry.time("ApplicationCatalog.discoverApplications") {
+            let roots = [
+                URL(fileURLWithPath: "/Applications"),
+                URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications"),
+                URL(fileURLWithPath: "/System/Applications"),
+                URL(fileURLWithPath: "/System/Applications/Utilities"),
+                URL(fileURLWithPath: "/Applications/Setapp")
+            ]
+            var urls: [URL] = []
+            let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
+            for root in roots {
+                guard let enumerator = FileManager.default.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: keys,
+                    options: [.skipsHiddenFiles]
+                ) else { continue }
 
-            for case let url as URL in enumerator {
-                if url.pathExtension == "app" {
-                    urls.append(url)
-                    enumerator.skipDescendants()
-                    continue
-                }
+                for case let url as URL in enumerator {
+                    if url.pathExtension == "app" {
+                        urls.append(url)
+                        enumerator.skipDescendants()
+                        continue
+                    }
 
-                if let values = try? url.resourceValues(forKeys: Set(keys)),
-                   values.isPackage == true {
-                    enumerator.skipDescendants()
+                    if let values = try? url.resourceValues(forKeys: Set(keys)),
+                       values.isPackage == true {
+                        enumerator.skipDescendants()
+                    }
                 }
             }
-        }
-        return Array(Set(urls)).sorted {
-            $0.deletingPathExtension().lastPathComponent.localizedCaseInsensitiveCompare($1.deletingPathExtension().lastPathComponent) == .orderedAscending
+            return Array(Set(urls)).sorted {
+                $0.deletingPathExtension().lastPathComponent.localizedCaseInsensitiveCompare($1.deletingPathExtension().lastPathComponent) == .orderedAscending
+            }
         }
     }
 }
 
 final class ActivitySampler {
     static func samples(for pids: [pid_t]) -> [pid_t: ProcessSample] {
-        guard !pids.isEmpty else { return [:] }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-o", "pid=,%cpu=,rss=", "-p", pids.map(String.init).joined(separator: ",")]
+        Telemetry.time("ActivitySampler.samples", extra: "pids=\(pids.count)") {
+            guard !pids.isEmpty else { return [:] }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/ps")
+            process.arguments = ["-o", "pid=,%cpu=,rss=", "-p", pids.map(String.init).joined(separator: ",")]
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = Pipe()
 
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return [:]
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                return [:]
+            }
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let output = String(data: data, encoding: .utf8) else { return [:] }
+            var result: [pid_t: ProcessSample] = [:]
+            for line in output.split(separator: "\n") {
+                let parts = line.split(separator: " ").map(String.init)
+                guard parts.count >= 3, let pid = pid_t(parts[0]), let rss = Int(parts[2]) else { continue }
+                let mb = max(1, rss / 1024)
+                result[pid] = ProcessSample(cpu: "\(parts[1])%", memory: "\(mb) MB")
+            }
+            return result
         }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8) else { return [:] }
-        var result: [pid_t: ProcessSample] = [:]
-        for line in output.split(separator: "\n") {
-            let parts = line.split(separator: " ").map(String.init)
-            guard parts.count >= 3, let pid = pid_t(parts[0]), let rss = Int(parts[2]) else { continue }
-            let mb = max(1, rss / 1024)
-            result[pid] = ProcessSample(cpu: "\(parts[1])%", memory: "\(mb) MB")
-        }
-        return result
     }
 }
 
@@ -2933,6 +2947,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
     }
 
     func rebuild() {
+        Telemetry.time("TaskbarController.rebuild", extra: "screen=\(screen.localizedName)") {
         let wasVisible = panel.isVisible
         panel.setFrame(wasVisible ? Self.frame(for: screen) : Self.hiddenFrame(for: screen), display: true, animate: false)
         triggerPanel.setFrame(Self.triggerFrame(for: screen), display: true, animate: false)
@@ -3026,6 +3041,7 @@ final class TaskbarController: NSObject, NSMenuDelegate {
             panel.orderFrontRegardless()
             panel.alphaValue = 1
             isRevealed = true
+        }
         }
     }
 
@@ -4061,11 +4077,21 @@ final class TaskbarController: NSObject, NSMenuDelegate {
 
     private func cycleWindows(for app: NSRunningApplication) {
         let state = AccessibilityWindowCatalog.state(for: app.processIdentifier)
+        let wasFocused = (state?.hasForegroundWindow ?? false) || app.isActive
+
+        // Clicking an app that wasn't already in focus should only bring it
+        // forward, never pull other minimized windows out of being
+        // minimized. Prefer an already-visible window; only when every
+        // window is minimized does it bring the first one into focus.
+        guard wasFocused else {
+            focusFirstAvailableWindow(for: app)
+            return
+        }
+
         if let state,
            state.hasWindows,
            state.minimizedCount == 0,
-           state.visibleCount > 0,
-           state.hasForegroundWindow || app.isActive {
+           state.visibleCount > 0 {
             hide(app)
             return
         }
@@ -4085,6 +4111,25 @@ final class TaskbarController: NSObject, NSMenuDelegate {
                 AccessibilityWindowCatalog.showFirstAvailableWindow(for: app.processIdentifier)
                 app.activate(options: [.activateAllWindows])
             }
+        }
+    }
+
+    /// Focuses an app that was clicked while it was not already in the
+    /// foreground, without restoring any other minimized windows: brings
+    /// forward the first already-visible window if there is one, and only
+    /// falls back to bringing the first (otherwise minimized) window into
+    /// focus when nothing is visible.
+    private func focusFirstAvailableWindow(for app: NSRunningApplication) {
+        app.unhide()
+        app.activate(options: [.activateAllWindows])
+        let didFocusWindow = AccessibilityWindowCatalog.showFirstAvailableWindow(for: app.processIdentifier)
+        if !didFocusWindow {
+            reopen(app)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak app] in
+            guard let app else { return }
+            AccessibilityWindowCatalog.showFirstAvailableWindow(for: app.processIdentifier)
+            app.activate(options: [.activateAllWindows])
         }
     }
 
@@ -4334,6 +4379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingPresentationBundleIDs = Set<String>()
     private var pendingPresentationBadgeRefresh = false
     private var presentationRefreshWorkItem: DispatchWorkItem?
+    private var workspaceChangeWorkItem: DispatchWorkItem?
 
     var isSettingsVisible: Bool {
         settingsWindowController.window?.isVisible == true
@@ -4341,6 +4387,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
+        Telemetry.note("mbar launched pid=\(ProcessInfo.processInfo.processIdentifier)")
+        // mbar is an .accessory app with no regular NSWindow (it only ever shows
+        // NSPanels for the taskbar/menus), so AppKit considers it "idle" with
+        // "no windows open" at all times. Left to its own defaults, macOS's
+        // automatic-termination feature for idle windowless background apps can
+        // silently quit mbar under memory pressure - a clean exit(0), not a
+        // crash, so launchd's KeepAlive(SuccessfulExit: false) correctly leaves
+        // it dead instead of relaunching it. Disabling automatic termination
+        // here stops macOS from ever doing that in the first place.
+        ProcessInfo.processInfo.disableAutomaticTermination("mbar is a persistent menu bar agent")
+        HangWatchdog.shared.start()
+        ResourceSampler.shared.start()
         NSApp.setActivationPolicy(.accessory)
         AccessibilityWindowCatalog.requestTrustIfNeeded()
         applicationCatalog.refreshIfNeeded(force: true)
@@ -4416,12 +4474,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !bundleIDs.isEmpty || shouldRefreshBadges else { return }
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            var metadata: [String: AppPresentationMetadata] = [:]
-            for bundleID in bundleIDs {
-                let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-                let name = url?.deletingPathExtension().lastPathComponent ?? bundleID
-                let icon = url.map { NSWorkspace.shared.icon(forFile: $0.path) }
-                metadata[bundleID] = AppPresentationMetadata(url: url, displayName: name, icon: icon)
+            let metadata: [String: AppPresentationMetadata] = Telemetry.time("AppDelegate.loadPresentationMetadata", extra: "bundleIDs=\(bundleIDs.count)") {
+                var metadata: [String: AppPresentationMetadata] = [:]
+                for bundleID in bundleIDs {
+                    let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+                    let name = url?.deletingPathExtension().lastPathComponent ?? bundleID
+                    let icon = url.map { NSWorkspace.shared.icon(forFile: $0.path) }
+                    metadata[bundleID] = AppPresentationMetadata(url: url, displayName: name, icon: icon)
+                }
+                return metadata
             }
             let badges = shouldRefreshBadges ? DockBadgeCatalog.badgeTexts() : nil
 
@@ -4476,8 +4537,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func workspaceChanged(_ notification: Notification) {
-        controllers.forEach { $0.rebuild() }
-        schedulePresentationRefresh(for: [], refreshBadges: true)
+        // NSWorkspace can fire a burst of launch/terminate/activate/hide/unhide
+        // notifications in rapid succession (e.g. quickly switching between two
+        // apps, or one app posting several of these in a row). Each full
+        // rebuild() is itself tens to hundreds of milliseconds of main-thread
+        // work across every screen, so reacting to every single raw
+        // notification turns a burst of notifications into a burst of
+        // back-to-back rebuilds that backs up the main thread and makes mbar
+        // appear to freeze. Debounce the same way schedulePresentationRefresh
+        // already does: coalesce any notifications arriving within 150ms into
+        // one rebuild.
+        workspaceChangeWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            Telemetry.time("AppDelegate.workspaceChanged.rebuild") {
+                self.controllers.forEach { $0.rebuild() }
+            }
+            self.schedulePresentationRefresh(for: [], refreshBadges: true)
+        }
+        workspaceChangeWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
     }
 
     @objc private func screenChanged(_ notification: Notification) {
