@@ -4388,6 +4388,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
         Telemetry.note("mbar launched pid=\(ProcessInfo.processInfo.processIdentifier)")
+        // mbar is an .accessory app with no regular NSWindow (it only ever shows
+        // NSPanels for the taskbar/menus), so AppKit considers it "idle" with
+        // "no windows open" at all times. Left to its own defaults, macOS's
+        // automatic-termination feature for idle windowless background apps can
+        // silently quit mbar under memory pressure - a clean exit(0), not a
+        // crash, so launchd's KeepAlive(SuccessfulExit: false) correctly leaves
+        // it dead instead of relaunching it. Disabling automatic termination
+        // here stops macOS from ever doing that in the first place.
+        ProcessInfo.processInfo.disableAutomaticTermination("mbar is a persistent menu bar agent")
         HangWatchdog.shared.start()
         ResourceSampler.shared.start()
         NSApp.setActivationPolicy(.accessory)

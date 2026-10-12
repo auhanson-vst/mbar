@@ -50,6 +50,11 @@ cat > "$agent_staged" <<PLIST
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
   <key>StandardOutPath</key>
   <string>$log_dir/stdout.log</string>
   <key>StandardErrorPath</key>
