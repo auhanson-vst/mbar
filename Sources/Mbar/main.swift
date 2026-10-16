@@ -4380,6 +4380,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingPresentationBadgeRefresh = false
     private var presentationRefreshWorkItem: DispatchWorkItem?
     private var workspaceChangeWorkItem: DispatchWorkItem?
+    /// Retained for the app's entire lifetime. Ending this activity (or never
+    /// starting it) lets macOS's App Nap put mbar into a reduced-priority,
+    /// timer-throttled state whenever it's not frontmost - which, being an
+    /// .accessory menu bar app, is effectively always. App Nap is separate
+    /// from (and in addition to) the automatic-termination issue fixed below:
+    /// it doesn't quit the app, it just quietly lowers its CPU/timer priority,
+    /// which is the opposite of what a background system-status app needs
+    /// when the machine is already under heavy load from something else.
+    private var cpuPriorityActivityToken: NSObjectProtocol?
 
     var isSettingsVisible: Bool {
         settingsWindowController.window?.isVisible == true
@@ -4388,6 +4397,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
         Telemetry.note("mbar launched pid=\(ProcessInfo.processInfo.processIdentifier)")
+        // Opt out of App Nap for mbar's whole lifetime. Without this, macOS
+        // treats an unfocused .accessory app as idle and throttles its CPU
+        // scheduling priority and timer rates - working against us exactly when
+        // the system is already contended and mbar needs normal priority the
+        // most. The returned token must be retained (not just discarded) for
+        // the opt-out to stay in effect; it is intentionally never ended.
+        cpuPriorityActivityToken = ProcessInfo.processInfo.beginActivity(
+            options: .userInitiated,
+            reason: "mbar is a persistent menu bar agent and must not be CPU/timer-throttled by App Nap"
+        )
         // mbar is an .accessory app with no regular NSWindow (it only ever shows
         // NSPanels for the taskbar/menus), so AppKit considers it "idle" with
         // "no windows open" at all times. Left to its own defaults, macOS's

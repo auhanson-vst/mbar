@@ -55,6 +55,8 @@ cat > "$agent_staged" <<PLIST
     <key>SuccessfulExit</key>
     <false/>
   </dict>
+  <key>ProcessType</key>
+  <string>Interactive</string>
   <key>StandardOutPath</key>
   <string>$log_dir/stdout.log</string>
   <key>StandardErrorPath</key>
